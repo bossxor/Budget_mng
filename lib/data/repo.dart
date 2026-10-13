@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core/classify.dart';
 import '../core/parsers.dart';
+import 'budget_repo.dart';
 import 'extras.dart';
 import 'planning_repo.dart';
 import 'settlement_repo.dart';
@@ -99,11 +100,13 @@ class Repo {
   Repo._(this._db)
       : settlements = SettlementRepo(_db),
         planning = PlanningRepo(_db),
-        tags = TagRepo(_db);
+        tags = TagRepo(_db),
+        budget = BudgetRepo(_db);
   final Database _db;
   final SettlementRepo settlements;
   final PlanningRepo planning;
   final TagRepo tags;
+  final BudgetRepo budget;
 
   /// 백업/검색 같은 부가 기능이 쓰는 원본 DB.
   Database get db => _db;
@@ -162,6 +165,7 @@ class Repo {
       tx_id TEXT, tag TEXT, PRIMARY KEY(tx_id, tag))''');
     await d.execute('''CREATE TABLE IF NOT EXISTS tx_split(
       id TEXT PRIMARY KEY, tx_id TEXT, category TEXT, amount INTEGER, memo TEXT)''');
+    await BudgetRepo.schema(d);
     await SettlementRepo.schema(d);
   }
 

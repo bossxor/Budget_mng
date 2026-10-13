@@ -224,6 +224,65 @@ Future<void> _editText(BuildContext context,
   );
 }
 
+Future<void> _editCategoryBudgets(BuildContext context, AppState s) async {
+  final current = await s.repo.budget.budgets();
+  if (!context.mounted) return;
+  final ctls = {
+    for (final c in categories)
+      c: TextEditingController(text: current[c]?.toString() ?? ''),
+  };
+  await showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('카테고리 예산',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          const Text('비워 두면 예산 없음'),
+          const SizedBox(height: 12),
+          for (final c in categories)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(children: [
+                RoundIcon(catIcon(c), Dsn.cat(c), size: 34),
+                const SizedBox(width: 12),
+                Expanded(child: Text(c)),
+                SizedBox(
+                  width: 140,
+                  child: TextField(
+                    controller: ctls[c],
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.end,
+                    decoration: const InputDecoration(suffixText: '원', isDense: true),
+                  ),
+                ),
+              ]),
+            ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () async {
+                for (final e in ctls.entries) {
+                  await s.repo.budget
+                      .setBudget(e.key, int.tryParse(e.value.text.replaceAll(',', '')));
+                }
+                await s.refresh();
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('저장'),
+            ),
+          ),
+        ]),
+      ),
+    ),
+  );
+}
+
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen(this.s, {super.key});
   final AppState s;
@@ -267,6 +326,34 @@ class SettingsScreen extends StatelessWidget {
           trailing: _FontDropdown(s),
         ),
         _ScaleRow(s),
+      ]),
+      _Group('예산', [
+        _Row(
+          icon: Icons.savings_rounded,
+          color: Dsn.coral,
+          title: '한 달 예산',
+          value: () {
+            final t = s.budgetLines.where((b) => b.category == null).firstOrNull;
+            return t == null ? '정하면 홈에서 남은 돈과 하루 사용 가능 금액을 보여 줘요' : '${fmt(t.limit)}원';
+          }(),
+          onTap: () => _editText(context,
+              title: '한 달 예산',
+              hint: '예: 1500000',
+              help: '비우거나 0이면 예산을 지워요.',
+              initial: (s.budgetLines.where((b) => b.category == null).firstOrNull?.limit ?? '')
+                  .toString(),
+              onSave: (v) => s.setBudget(null, int.tryParse(v.replaceAll(',', '')))),
+        ),
+        _Row(
+          icon: Icons.category_rounded,
+          color: Dsn.coral,
+          title: '카테고리 예산',
+          value: () {
+            final n = s.budgetLines.where((b) => b.category != null).length;
+            return n == 0 ? '식비, 카페처럼 따로 한도를 정해요' : '$n개 설정됨';
+          }(),
+          onTap: () => _editCategoryBudgets(context, s),
+        ),
       ]),
       _Group('보안', [
         _Row(

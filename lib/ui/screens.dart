@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../data/budget_repo.dart';
 import '../data/repo.dart';
 import 'accounts_screen.dart';
 import 'extras_screens.dart';
@@ -246,6 +247,116 @@ class _MiniStat extends StatelessWidget {
       );
 }
 
+class _BudgetCard extends StatelessWidget {
+  const _BudgetCard(this.s);
+  final AppState s;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final total = s.budgetLines.where((b) => b.category == null).firstOrNull;
+    final cats = s.budgetLines.where((b) => b.category != null).toList();
+    final days = s.daysLeftThisMonth;
+    Color barColor(double r) => r >= 1 ? Dsn.coral : (r >= 0.8 ? Dsn.amber : Dsn.mint);
+    Widget bar(BudgetLine b, {double h = 8}) => ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: b.ratio.clamp(0.0, 1.0),
+            minHeight: h,
+            color: barColor(b.ratio),
+            backgroundColor: barColor(b.ratio).withValues(alpha: 0.15),
+          ),
+        );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('이번 달 예산',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          if (total != null) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Text(total.left >= 0 ? '${fmt(total.left)}원 남았어요' : '${fmt(total.left)}원 넘었어요',
+                  style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: total.left >= 0 ? cs.onSurface : Dsn.coral)),
+              const Spacer(),
+              Text('${(total.ratio * 100).round()}% 사용',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+            ]),
+            const SizedBox(height: 8),
+            bar(total, h: 10),
+            if (days != null && total.left > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('오늘부터 하루 ${fmt(total.left ~/ days)}원씩 쓸 수 있어요',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+              ),
+          ],
+          for (final b in cats)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Text(b.category!, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  const Spacer(),
+                  Text('${fmt(b.spent)} / ${fmt(b.limit)}원',
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: b.ratio >= 1 ? Dsn.coral : cs.onSurfaceVariant)),
+                ]),
+                const SizedBox(height: 6),
+                bar(b),
+              ]),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _RecurringCard extends StatelessWidget {
+  const _RecurringCard(this.s);
+  final AppState s;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final sum = s.recurring.fold<int>(0, (a, r) => a + r.amount);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('고정지출',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            Text('${s.recurring.length}건 · 월 ${fmt(sum)}원',
+                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+          ]),
+          const SizedBox(height: 6),
+          for (final r in s.recurring.take(4))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(children: [
+                const RoundIcon(Icons.autorenew_rounded, Dsn.blue, size: 34),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(r.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    Text('다음 예상 ${r.nextDate.month}월 ${r.nextDate.day}일 · ${r.months}개월째',
+                        style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
+                  ]),
+                ),
+                Text('${fmt(r.amount)}원',
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+              ]),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
 class HomeScreen extends StatelessWidget {
   const HomeScreen(this.s, {super.key, required this.goHistory});
   final AppState s;
@@ -379,6 +490,8 @@ class HomeScreen extends StatelessWidget {
                   onPressed: () => exportBackup(context, s), child: const Text('백업')),
             ),
           ),
+        if (s.budgetLines.isNotEmpty) _BudgetCard(s),
+        if (s.recurring.isNotEmpty) _RecurringCard(s),
         for (final o in s.overdue.take(2))
           Card(
             color: const Color(0xFFFFEFE0),

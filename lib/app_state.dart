@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'data/repo.dart';
+import 'data/budget_repo.dart';
 import 'data/planning_repo.dart';
 import 'data/settlement_repo.dart';
 import 'lock.dart';
@@ -41,6 +42,8 @@ class AppState extends ChangeNotifier {
   int receivable = 0; // 아직 못 받은 정산 금액
   List<LinkSuggestion> suggestions = [];
   List<OverdueItem> overdue = [];
+  List<BudgetLine> budgetLines = [];
+  List<Recurring> recurring = [];
   String requestTemplate = defaultRequestTemplate;
   SavingsSummary savings = SavingsSummary(0, 0);
   List<PlanStatus> plans = [];
@@ -77,6 +80,8 @@ class AppState extends ChangeNotifier {
         (await repo.settlements.all()).fold(0, (a, x) => a + x.outstanding);
     suggestions = await repo.settlements.suggestions();
     overdue = await repo.settlements.overdue();
+    budgetLines = await repo.budget.status(summary.expense, summary.byCategory);
+    recurring = await repo.budget.recurring();
     requestTemplate =
         (await repo.getKv('req_template')) ?? defaultRequestTemplate;
     savings = await repo.planning.savings(month);
@@ -205,6 +210,18 @@ class AppState extends ChangeNotifier {
     await repo.setKv('raw_keep_days', '$d');
     await repo.purgeRaw(d);
     notifyListeners();
+  }
+
+  Future<void> setBudget(String? category, int? amount) async {
+    await repo.budget.setBudget(category, amount);
+    await refresh();
+  }
+
+  /// 보고 있는 달이 이번 달이면 남은 날(오늘 포함) 수, 아니면 null.
+  int? get daysLeftThisMonth {
+    final n = DateTime.now();
+    if (n.year != month.year || n.month != month.month) return null;
+    return DateTime(n.year, n.month + 1, 0).day - n.day + 1;
   }
 
   Future<void> setRequestTemplate(String v) async {
