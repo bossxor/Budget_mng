@@ -20,6 +20,7 @@ class TxRow {
   final String? account;
   final String status; // ok | review
   final String? memo;
+  String? note; // 사용자 메모
 
   /// 정산에 묶인 지출이면 내 몫, 아니면 null.
   int? mine;
@@ -40,7 +41,7 @@ class TxRow {
         m['account'] as String?,
         (m['status'] ?? 'ok') as String,
         m['memo'] as String?,
-      );
+      )..note = m['note'] as String?;
 }
 
 class TxSplit {
@@ -156,6 +157,10 @@ class Repo {
     }
     try {
       await d.execute('ALTER TABLE tx ADD COLUMN dir TEXT');
+    } catch (_) {}
+    // 사용자가 적는 메모. memo 컬럼은 '중복 의심' 같은 검토 표시로 쓴다.
+    try {
+      await d.execute('ALTER TABLE tx ADD COLUMN note TEXT');
     } catch (_) {}
     await d.execute('''CREATE TABLE IF NOT EXISTS allocation(
       id TEXT PRIMARY KEY, from_key TEXT, to_key TEXT, amount INTEGER, day INTEGER)''');
@@ -574,6 +579,17 @@ class Repo {
       await _db.update('tx', {'type': type, 'status': 'ok', 'memo': null},
           where: 'id=?', whereArgs: [id]);
     }
+  }
+
+  /// 이름·금액·날짜·메모를 고친다. 이름은 표시용 가맹점(merchant)에 저장해 입금자명 매칭은 그대로 둔다.
+  Future<void> updateTx(String id,
+      {String? title, int? amount, DateTime? at, String? note}) async {
+    final v = <String, Object?>{'updated_at': DateTime.now().millisecondsSinceEpoch};
+    if (title != null && title.trim().isNotEmpty) v['merchant'] = title.trim();
+    if (amount != null) v['amount'] = amount;
+    if (at != null) v['occurred_at'] = at.millisecondsSinceEpoch;
+    if (note != null) v['note'] = note.trim().isEmpty ? null : note.trim();
+    await _db.update('tx', v, where: 'id=?', whereArgs: [id]);
   }
 
   Future<void> confirm(String id) => _db.update(

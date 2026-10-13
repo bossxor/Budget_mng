@@ -24,6 +24,17 @@ const fontGoogleNames = {
   'serif': 'Noto Serif KR',
 };
 
+const categories = [
+  '식비', '카페', '편의점', '배달', '교통', '쇼핑', '구독', '의료', '생활', '문화/여가',
+  '경조사', '송금', '기타',
+];
+
+/// 사용자가 추가한 카테고리. 앱 시작 시 kv에서 읽는다.
+final customCategories = <String>[];
+
+List<String> get allCategories =>
+    [...categories, ...customCategories.where((c) => !categories.contains(c))];
+
 const _channel = MethodChannel('jumeoni/native');
 
 class AppState extends ChangeNotifier {
@@ -65,6 +76,11 @@ class AppState extends ChangeNotifier {
     textScale = double.tryParse(await repo.getKv('text_scale') ?? '') ?? 1.0;
     myNames = (await repo.getKv('my_names')) ?? '';
     payAccount = (await repo.getKv('pay_account')) ?? '';
+    customCategories
+      ..clear()
+      ..addAll(((await repo.getKv('custom_categories')) ?? '')
+          .split(',')
+          .where((c) => c.trim().isNotEmpty));
     await _loadLock();
     await refresh();
   }
@@ -235,6 +251,15 @@ class AppState extends ChangeNotifier {
       title: o.settlement.title,
       amount: o.share.remaining,
       account: payAccount);
+
+  /// 새 카테고리를 추가한다. 이미 있으면 아무것도 하지 않는다.
+  Future<void> addCategory(String name) async {
+    final n = name.trim().replaceAll(',', ' ');
+    if (n.isEmpty || allCategories.contains(n)) return;
+    customCategories.add(n);
+    await repo.setKv('custom_categories', customCategories.join(','));
+    notifyListeners();
+  }
 
   Future<void> setPayAccount(String v) async {
     payAccount = v;

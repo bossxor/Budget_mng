@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
 import '../data/backup.dart';
+import '../data/extras.dart';
 import '../data/report.dart';
 import '../data/repo.dart';
 import 'screens.dart';
@@ -409,10 +410,10 @@ Future<void> showSplitSheet(BuildContext context, AppState s, TxRow t) async {
                   Expanded(
                     child: DropdownButton<String>(
                       isExpanded: true,
-                      value: categories.contains(cats[i]) ? cats[i] : null,
+                      value: allCategories.contains(cats[i]) ? cats[i] : null,
                       hint: Text(cats[i]),
                       items: [
-                        for (final c in categories)
+                        for (final c in allCategories)
                           DropdownMenuItem(value: c, child: Text(c)),
                       ],
                       onChanged: (v) => setS(() => cats[i] = v ?? cats[i]),
@@ -604,6 +605,25 @@ Future<void> importBackup(BuildContext context, AppState s) async {
       Navigator.of(context, rootNavigator: true).pop();
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('복원에 실패했어요: $e')));
+    }
+  }
+}
+
+/// CSV로 내보내 공유한다 (이번 달 또는 전체).
+Future<void> exportCsvFile(BuildContext context, AppState s, {DateTime? month}) async {
+  try {
+    final csv = await exportCsv(s.repo, month: month);
+    final name = month == null
+        ? 'jumeoni_all.csv'
+        : 'jumeoni_${month.year}${month.month.toString().padLeft(2, '0')}.csv';
+    final f = File('${Directory.systemTemp.path}/$name');
+    await f.writeAsString(csv);
+    await SharePlus.instance
+        .share(ShareParams(files: [XFile(f.path)], subject: '주머니 내역'));
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('내보내기에 실패했어요: $e')));
     }
   }
 }

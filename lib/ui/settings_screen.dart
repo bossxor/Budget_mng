@@ -228,7 +228,7 @@ Future<void> _editCategoryBudgets(BuildContext context, AppState s) async {
   final current = await s.repo.budget.budgets();
   if (!context.mounted) return;
   final ctls = {
-    for (final c in categories)
+    for (final c in allCategories)
       c: TextEditingController(text: current[c]?.toString() ?? ''),
   };
   await showModalBottomSheet(
@@ -244,7 +244,7 @@ Future<void> _editCategoryBudgets(BuildContext context, AppState s) async {
           const SizedBox(height: 4),
           const Text('비워 두면 예산 없음'),
           const SizedBox(height: 12),
-          for (final c in categories)
+          for (final c in allCategories)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(children: [
@@ -456,6 +456,36 @@ class SettingsScreen extends StatelessWidget {
               ? '암호로 잠근 파일로 저장해요'
               : '마지막 백업 ${s.lastBackupAt!.month}월 ${s.lastBackupAt!.day}일',
           onTap: () => exportBackup(context, s),
+        ),
+        _Row(
+          icon: Icons.table_view_rounded,
+          color: Dsn.mint,
+          title: 'CSV로 내보내기',
+          value: '엑셀에서 바로 열 수 있어요',
+          onTap: () => showModalBottomSheet(
+            context: context,
+            showDragHandle: true,
+            builder: (ctx) => SafeArea(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                ListTile(
+                  leading: const Icon(Icons.calendar_month_rounded),
+                  title: Text('${s.month.year}년 ${s.month.month}월'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    exportCsvFile(context, s, month: s.month);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.all_inclusive_rounded),
+                  title: const Text('전체 기간'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    exportCsvFile(context, s);
+                  },
+                ),
+              ]),
+            ),
+          ),
         ),
         _Row(
           icon: Icons.cloud_download_rounded,

@@ -33,11 +33,6 @@ String dayLabel(DateTime d) {
   return base;
 }
 
-const categories = [
-  '식비', '카페', '편의점', '배달', '교통', '쇼핑', '구독', '의료', '생활', '문화/여가',
-  '경조사', '송금', '기타',
-];
-
 IconData catIcon(String? c) => switch (c) {
       '카페' => Icons.local_cafe_rounded,
       '식비' => Icons.restaurant_rounded,
@@ -98,6 +93,7 @@ class TxTile extends StatelessWidget {
       if (t.type == 'expense') t.category ?? '미분류',
       if (t.type == 'expense' && t.mine != null) '내 몫 ${fmt(t.mine!)}원',
       if (t.account != null) t.account!,
+      if (t.note != null) t.note!,
     ].join(' · ');
     return InkWell(
       onTap: onTap,
@@ -805,7 +801,7 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
           const Text('카테고리', style: TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           Wrap(spacing: 8, runSpacing: 8, children: [
-            for (final c in categories)
+            for (final c in allCategories)
               ChoiceChip(
                 avatar: Icon(catIcon(c), size: 18, color: Dsn.cat(c)),
                 label: Text(c),
@@ -816,9 +812,50 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
                   if (ctx.mounted) Navigator.pop(ctx);
                 },
               ),
+            ActionChip(
+              avatar: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('새 카테고리'),
+              onPressed: () async {
+                final ctl = TextEditingController();
+                final name = await showDialog<String>(
+                  context: ctx,
+                  builder: (d) => AlertDialog(
+                    title: const Text('새 카테고리'),
+                    content: TextField(
+                      controller: ctl,
+                      autofocus: true,
+                      decoration: const InputDecoration(hintText: '예: 반려동물'),
+                    ),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(d), child: const Text('취소')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(d, ctl.text.trim()),
+                          child: const Text('추가')),
+                    ],
+                  ),
+                );
+                if (name == null || name.isEmpty) return;
+                await s.addCategory(name);
+                await s.repo.setCategory(t, name.replaceAll(',', ' '));
+                await s.refresh();
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+            ),
           ]),
+          if (t.note != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text('메모: ${t.note}',
+                  style: TextStyle(color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
+            ),
           const SizedBox(height: 16),
           Wrap(spacing: 8, runSpacing: 8, children: [
+            OutlinedButton(
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await showTxForm(context, s, t);
+                },
+                child: const Text('수정')),
             if (t.status == 'review')
               FilledButton.tonal(
                   onPressed: () async {
@@ -856,6 +893,81 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
                 },
                 child: const Text('삭제')),
           ]),
+        ]),
+      ),
+    ),
+  );
+}
+
+/// 거래 이름·금액·날짜·메모 수정.
+Future<void> showTxForm(BuildContext context, AppState s, TxRow t) {
+  final title = TextEditingController(text: t.title);
+  final amt = TextEditingController(text: '${t.amount}');
+  final note = TextEditingController(text: t.note ?? '');
+  var at = t.occurredAt;
+  String? err;
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setS) => Padding(
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: title, decoration: const InputDecoration(labelText: '내용')),
+          const SizedBox(height: 12),
+          TextField(
+            controller: amt,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(labelText: '금액', suffixText: '원', errorText: err),
+          ),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: Text('${at.year}.${at.month}.${at.day} ${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}')),
+            TextButton(
+              onPressed: () async {
+                final d = await showDatePicker(
+                    context: ctx,
+                    initialDate: at,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime.now().add(const Duration(days: 365)));
+                if (d != null) setS(() => at = DateTime(d.year, d.month, d.day, at.hour, at.minute));
+              },
+              child: const Text('날짜'),
+            ),
+            TextButton(
+              onPressed: () async {
+                final tm = await showTimePicker(
+                    context: ctx, initialTime: TimeOfDay.fromDateTime(at));
+                if (tm != null) setS(() => at = DateTime(at.year, at.month, at.day, tm.hour, tm.minute));
+              },
+              child: const Text('시간'),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          TextField(
+            controller: note,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: '메모'),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () async {
+                final a = int.tryParse(amt.text.replaceAll(',', ''));
+                if (a == null || a < 0) {
+                  setS(() => err = '금액을 확인하세요');
+                  return;
+                }
+                await s.repo.updateTx(t.id,
+                    title: title.text, amount: a, at: at, note: note.text);
+                await s.refresh();
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('저장'),
+            ),
+          ),
         ]),
       ),
     ),

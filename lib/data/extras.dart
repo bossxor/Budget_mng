@@ -47,9 +47,9 @@ class TagRepo {
     final args = <Object?>[];
     if (text != null && text.trim().isNotEmpty) {
       where.add(
-          "(t.merchant LIKE ? OR t.counterparty LIKE ? OR t.memo LIKE ? OR t.id IN (SELECT tx_id FROM tx_tag WHERE tag LIKE ?))");
+          "(t.merchant LIKE ? OR t.counterparty LIKE ? OR t.memo LIKE ? OR t.note LIKE ? OR t.id IN (SELECT tx_id FROM tx_tag WHERE tag LIKE ?))");
       final q = '%${text.trim()}%';
-      args.addAll([q, q, q, q]);
+      args.addAll([q, q, q, q, q]);
     }
     if (tag != null) {
       where.add('t.id IN (SELECT tx_id FROM tx_tag WHERE tag=?)');
@@ -85,4 +85,54 @@ class TagRepo {
         args);
     return r.map(TxRow.fromMap).toList();
   }
+}
+
+const _typeLabel = {
+  'expense': '지출',
+  'income': '입금',
+  'transfer': '이체',
+  'group': '모임통장',
+};
+
+String _csvCell(Object? v) {
+  final s = v?.toString() ?? '';
+  return RegExp(r'[",\r\n]').hasMatch(s) ? '"${s.replaceAll('"', '""')}"' : s;
+}
+
+/// 엑셀에서 바로 열리는 CSV(UTF-8 BOM). month가 없으면 전체 기간.
+/// '가계부 반영'은 정산 몫·정산 입금을 반영한 금액이고, 이체와 모임통장은 0이다.
+Future<String> exportCsv(Repo repo, {DateTime? month}) async {
+  final where = ['deleted_at IS NULL'];
+  final args = <Object?>[];
+  if (month != null) {
+    where.add('occurred_at>=? AND occurred_at<?');
+    args.addAll([
+      DateTime(month.year, month.month).millisecondsSinceEpoch,
+      DateTime(month.year, month.month + 1).millisecondsSinceEpoch,
+    ]);
+  }
+  final rows = await repo.db.query('tx',
+      where: where.join(' AND '), whereArgs: args, orderBy: 'occurred_at');
+  final mine = await repo.settlements.myAmountByTx();
+  final paid = await repo.settlements.paidByTx();
+  String two(int n) => n.toString().padLeft(2, '0');
+  final lines = <String>['날짜,유형,금액,가계부 반영,내용,카테고리,계좌,메모'];
+  for (final m in rows) {
+    final t = TxRow.fromMap(m)
+      ..mine = mine[m['id']]
+      ..paid = paid[m['id']] ?? 0;
+    final shown = (t.type == 'expense' || t.type == 'income') ? t.effective : 0;
+    final d = t.occurredAt;
+    lines.add([
+      '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}',
+      _typeLabel[t.type] ?? t.type,
+      t.amount,
+      shown,
+      t.title,
+      t.category ?? '',
+      t.account ?? '',
+      t.note ?? '',
+    ].map(_csvCell).join(','));
+  }
+  return '\uFEFF${lines.join('\r\n')}\r\n';
 }
