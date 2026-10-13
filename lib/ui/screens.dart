@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../data/budget_repo.dart';
@@ -154,6 +155,28 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> {
   int _i = 0;
+  static const _native = MethodChannel('jumeoni/native');
+
+  @override
+  void initState() {
+    super.initState();
+    // 앱이 떠 있을 때 바로가기로 다시 들어온 경우.
+    _native.setMethodCallHandler((call) async {
+      if (call.method == 'launchAction') _run(call.arguments as String?);
+    });
+    // 바로가기로 앱이 새로 켜진 경우.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        _run(await _native.invokeMethod<String>('takeLaunchAction'));
+      } catch (_) {}
+    });
+  }
+
+  void _run(String? action) {
+    if (action != 'quick_add' || !mounted) return;
+    setState(() => _i = 1); // 내역 탭에서 입력 시트를 연다
+    showManualEntry(context, widget.s);
+  }
   @override
   Widget build(BuildContext context) {
     final s = widget.s;

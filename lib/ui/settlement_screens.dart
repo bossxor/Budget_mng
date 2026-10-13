@@ -95,7 +95,8 @@ class _SettlementListScreenState extends State<SettlementListScreen> {
                       st.status == 'done' ? Icons.check_circle_rounded : Icons.groups_rounded,
                       st.status == 'done' ? Dsn.mint : Dsn.blue),
                   title: Text(st.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: Text('결제 ${fmt(st.total)}원 · ${st.shares.length}명'),
+                  subtitle: Text('결제 ${fmt(st.total)}원 · ${st.shares.length}명'
+                      '${st.payOutstanding > 0 ? ' · 보낼 돈 ${fmt(st.payOutstanding)}원' : ''}'),
                   trailing: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                     Text(_statusLabel[st.status]!,
                         style: TextStyle(
@@ -139,6 +140,7 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
   List<TxRow> _candidates = [];
   List<Person> _people = [];
   List<GroupPreset> _presets = [];
+  final _extras = <ExtraInput>[];
   final _picked = <String>{};
   final _title = TextEditingController();
   final _newName = TextEditingController();
@@ -167,9 +169,62 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
     });
   }
 
-  int get _total => _candidates
-      .where((t) => _picked.contains(t.id))
-      .fold(0, (a, t) => a + t.amount);
+  int get _total =>
+      _candidates
+          .where((t) => _picked.contains(t.id))
+          .fold(0, (a, t) => a + t.amount) +
+      _extras.fold(0, (a, e) => a + e.amount);
+
+  Future<void> _addExtra() async {
+    final who = TextEditingController();
+    final what = TextEditingController();
+    final amt = TextEditingController();
+    String? err;
+    final r = await showDialog<ExtraInput>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('다른 사람이 낸 결제'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            if (_people.isNotEmpty)
+              Wrap(spacing: 6, children: [
+                for (final p in _people.take(8))
+                  ActionChip(label: Text(p.name), onPressed: () => who.text = p.name),
+              ]),
+            TextField(controller: who, decoration: const InputDecoration(labelText: '낸 사람')),
+            const SizedBox(height: 8),
+            TextField(controller: what, decoration: const InputDecoration(labelText: '내용 (예: 2차 호프)')),
+            const SizedBox(height: 8),
+            TextField(
+              controller: amt,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(labelText: '금액', suffixText: '원', errorText: err),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+            FilledButton(
+              onPressed: () {
+                final a = int.tryParse(amt.text.replaceAll(',', ''));
+                if (who.text.trim().isEmpty) {
+                  setS(() => err = '낸 사람을 입력하세요');
+                } else if (a == null || a <= 0) {
+                  setS(() => err = '금액을 입력하세요');
+                } else {
+                  Navigator.pop(
+                      ctx,
+                      ExtraInput(who.text.trim(),
+                          what.text.trim().isEmpty ? '${who.text.trim()} 결제' : what.text.trim(), a));
+                }
+              },
+              child: const Text('추가'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (r != null) setState(() => _extras.add(r));
+  }
 
   /// 합계를 인원수로 나누고, 남는 원 단위는 '나'(없으면 첫 사람)에게 붙인다.
   void _split() {
@@ -203,12 +258,14 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
       setState(() => _error = '합계가 ${fmt(_total)}원이 되어야 해요 (지금 ${fmt(sum)}원)');
       return;
     }
-    final first = _candidates.firstWhere((t) => _picked.contains(t.id));
-    final title = _title.text.trim().isEmpty ? first.title : _title.text.trim();
+    final first = _candidates.where((t) => _picked.contains(t.id)).firstOrNull;
+    final fallback = first?.title ?? _extras.first.title;
+    final title = _title.text.trim().isEmpty ? fallback : _title.text.trim();
     await widget.s.repo.settlements.create(
       title: title,
       txIds: _picked.toList(),
       shares: [for (final p in _parts) ShareInput(p.name, p.amount)],
+      extras: _extras,
     );
     if (mounted) Navigator.pop(context, true);
   }
@@ -223,9 +280,34 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
 
   Widget _buildStep1() => Column(children: [
         Expanded(
-          child: _candidates.isEmpty
-              ? const Center(child: Text('최근 60일 안에 정산할 수 있는 지출이 없어요.'))
-              : ListView(children: [
+          child: ListView(children: [
+                  ListTile(
+                    leading: const Icon(Icons.person_add_alt_1_rounded),
+                    title: const Text('다른 사람이 낸 결제 추가'),
+                    subtitle: const Text('예: 2차는 친구가 결제했을 때'),
+                    onTap: _addExtra,
+                  ),
+                  for (var i = 0; i < _extras.length; i++)
+                    ListTile(
+                      leading: InitialAvatar(_extras[i].payer, size: 36),
+                      title: Text(_extras[i].title),
+                      subtitle: Text('${_extras[i].payer}님이 결제'),
+                      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text('${fmt(_extras[i].amount)}원',
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => setState(() => _extras.removeAt(i)),
+                        ),
+                      ]),
+                    ),
+                  const Divider(),
+                  if (_candidates.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('최근 60일 안에 내가 결제한 지출이 없어요.',
+                          textAlign: TextAlign.center),
+                    ),
                   for (final t in _candidates)
                     CheckboxListTile(
                       value: _picked.contains(t.id),
@@ -244,13 +326,19 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
             padding: const EdgeInsets.all(16),
             child: Row(children: [
               Expanded(
-                  child: Text('${_picked.length}건 · 합계 ${fmt(_total)}원',
+                  child: Text('${_picked.length + _extras.length}건 · 합계 ${fmt(_total)}원',
                       style: const TextStyle(fontSize: 16))),
               FilledButton(
-                onPressed: _picked.isEmpty
+                onPressed: _picked.isEmpty && _extras.isEmpty
                     ? null
                     : () {
-                        setState(() => _step2 = true);
+                        setState(() {
+                          _step2 = true;
+                          // 결제한 사람은 함께한 사람에 자동으로 넣는다.
+                          for (final e in _extras) {
+                            if (!_selectedNames.contains(e.payer)) _selectedNames.add(e.payer);
+                          }
+                        });
                         _split();
                       },
                 child: const Text('다음'),
@@ -434,8 +522,10 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
     await SharePlus.instance.share(ShareParams(text: text));
   }
 
-  Future<void> _link(SettlementView st, ShareView sh) async {
-    final cands = await widget.s.repo.settlements.candidates(sh.name);
+  Future<void> _link(SettlementView st, ShareView sh, {bool outgoing = false}) async {
+    final cands = outgoing
+        ? await widget.s.repo.settlements.outgoingCandidates(sh.name)
+        : await widget.s.repo.settlements.candidates(sh.name);
     if (!mounted) return;
     await showModalBottomSheet(
       context: context,
@@ -447,7 +537,9 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
         builder: (ctx, ctl) => Column(children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Text('${sh.name}님 입금 연결 (남은 ${fmt(sh.remaining)}원)',
+            child: Text(outgoing
+                ? '${sh.name}님께 보낸 송금 연결 (남은 ${fmt(sh.remaining)}원)'
+                : '${sh.name}님 입금 연결 (남은 ${fmt(sh.remaining)}원)',
                 style: Theme.of(ctx).textTheme.titleMedium),
           ),
           Expanded(
@@ -470,7 +562,7 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
                         ]),
                         subtitle: Text(
                             '${c.tx.occurredAt.month}/${c.tx.occurredAt.day} · 남은 입금 ${fmt(c.free)}원'),
-                        trailing: Text('+${fmt(c.tx.amount)}',
+                        trailing: Text('${outgoing ? '−' : '+'}${fmt(c.tx.amount)}',
                             style: TextStyle(
                                 color: Theme.of(ctx).colorScheme.primary,
                                 fontWeight: FontWeight.w600)),
@@ -554,8 +646,15 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
                     ListTile(
                       dense: true,
                       title: Text(t.title),
-                      subtitle: Text('${t.occurredAt.month}/${t.occurredAt.day}'),
+                      subtitle: Text('${t.occurredAt.month}/${t.occurredAt.day} · 내가 결제'),
                       trailing: Text('${fmt(t.amount)}원'),
+                    ),
+                  for (final e in st.extras)
+                    ListTile(
+                      dense: true,
+                      title: Text(e.title),
+                      subtitle: Text('${e.payer}님이 결제'),
+                      trailing: Text('${fmt(e.amount)}원'),
                     ),
                   const Divider(height: 24),
                   Text('사람별', style: Theme.of(context).textTheme.titleSmall),
@@ -571,18 +670,33 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
                                 style: const TextStyle(
                                     fontSize: 16, fontWeight: FontWeight.w600)),
                             const Spacer(),
-                            Text('${fmt(sh.amount)}원'),
+                            Text('쓴 몫 ${fmt(sh.amount)}원'),
                           ]),
                           if (!sh.isMe) ...[
+                            if (sh.paidByThem > 0)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text('대신 낸 돈 ${fmt(sh.paidByThem)}원',
+                                    style: const TextStyle(fontSize: 12.5)),
+                              ),
                             const SizedBox(height: 6),
                             Text(
-                                sh.remaining <= 0
-                                    ? '입금 완료'
-                                    : '받음 ${fmt(sh.received)}원 · 남음 ${fmt(sh.remaining)}원',
+                                sh.due == 0
+                                    ? '주고받을 돈 없음'
+                                    : sh.iOwe
+                                        ? (sh.remaining <= 0
+                                            ? '보내기 완료'
+                                            : '내가 보낼 돈 ${fmt(-sh.due)}원 · 보냄 ${fmt(sh.received)}원 · 남음 ${fmt(sh.remaining)}원')
+                                        : (sh.remaining <= 0
+                                            ? '입금 완료'
+                                            : '받음 ${fmt(sh.received)}원 · 남음 ${fmt(sh.remaining)}원'),
                                 style: TextStyle(
-                                    color: sh.remaining <= 0
+                                    fontWeight: FontWeight.w600,
+                                    color: sh.due == 0 || sh.remaining <= 0
                                         ? Theme.of(context).colorScheme.primary
-                                        : Theme.of(context).colorScheme.error)),
+                                        : (sh.iOwe
+                                            ? Dsn.amber
+                                            : Theme.of(context).colorScheme.error))),
                             FutureBuilder(
                               future: widget.s.repo.settlements.paymentsOf(sh.id),
                               builder: (c, ps) => Column(children: [
@@ -590,7 +704,7 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
                                   Row(children: [
                                     Expanded(
                                         child: Text(
-                                            '· ${(p['counterparty'] ?? p['merchant'] ?? '') as String} +${fmt(p['amount'] as int)}',
+                                            '· ${(p['counterparty'] ?? p['merchant'] ?? '') as String} ${sh.iOwe ? '−' : '+'}${fmt(p['amount'] as int)}',
                                             style: const TextStyle(fontSize: 12))),
                                     TextButton(
                                         onPressed: () async {
@@ -602,7 +716,11 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
                                   ]),
                               ]),
                             ),
-                            if (sh.remaining > 0)
+                            if (sh.remaining > 0 && sh.iOwe)
+                              OutlinedButton(
+                                  onPressed: () => _link(st, sh, outgoing: true),
+                                  child: const Text('보낸 송금 연결')),
+                            if (sh.remaining > 0 && !sh.iOwe && sh.due != 0)
                               Wrap(spacing: 8, children: [
                                 OutlinedButton(
                                     onPressed: () => _link(st, sh),

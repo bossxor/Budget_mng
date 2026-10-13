@@ -197,4 +197,66 @@ void main() {
     o = await repo.settlements.overdue(now: later);
     expect(o.map((x) => x.share.name), ['이지훈']);
   });
+
+  test('상계: 다른 사람이 낸 결제가 있으면 사람별 순액과 내 지출이 맞게 나온다', () async {
+    final a = await tx('expense', 150000, '1차 고깃집', day: 2);
+    final id = await repo.settlements.create(
+      title: '1·2차',
+      txIds: [a.id],
+      shares: [
+        ShareInput(null, 57500),
+        ShareInput('김민수', 57500),
+        ShareInput('이지훈', 57500),
+        ShareInput('박서연', 57500),
+      ],
+      extras: [ExtraInput('김민수', '2차 호프', 80000)],
+    );
+    var st = (await repo.settlements.get(id))!;
+    expect(st.total, 230000);
+    expect(st.myPaid, 150000);
+    final kim = st.others.firstWhere((x) => x.name == '김민수');
+    expect(kim.paidByThem, 80000);
+    expect(kim.due, -22500);
+    expect(kim.iOwe, isTrue);
+    expect(st.toReceive, 115000);
+    expect(st.toPay, 22500);
+    expect(st.myItemsTarget, 35000);
+    // 송금 전: 내 결제 중 35,000만 지출 (김민수에게 보낼 22,500은 송금이 지출로 잡힘)
+    expect((await repo.summary(DateTime(DateTime.now().year, DateTime.now().month))).expense, 35000);
+
+    // 김민수에게 22,500 송금(지출)하고 연결하면 내 지출 합은 내 몫 57,500이 된다.
+    final sent = await tx('expense', 22500, '김민수', day: 3);
+    final out = (await repo.settlements.outgoingCandidates('김민수'))
+        .firstWhere((c) => c.tx.id == sent.id);
+    expect(out.nameMatch, isTrue);
+    await repo.settlements.pay(kim, out, 22500);
+    final month = DateTime(DateTime.now().year, DateTime.now().month);
+    expect((await repo.summary(month)).expense, 57500);
+    st = (await repo.settlements.get(id))!;
+    expect(st.payOutstanding, 0);
+    expect(st.status, 'partial'); // 보낼 돈은 끝났고 받을 돈은 아직
+
+    // 결제한 1차는 정산 결제라 송금 후보에 나오지 않는다.
+    expect((await repo.settlements.outgoingCandidates('김민수')).any((c) => c.tx.id == a.id), isFalse);
+  });
+
+  test('결제한 사람이 몫 목록에 없으면 몫 0으로 들어가 전액을 돌려받을 사람이 된다', () async {
+    final a = await tx('expense', 30000, '점심', day: 4);
+    final id = await repo.settlements.create(
+      title: '점심',
+      txIds: [a.id],
+      shares: [ShareInput(null, 25000), ShareInput('이지훈', 25000)],
+      extras: [ExtraInput('박서연', '커피', 20000)],
+    );
+    final st = (await repo.settlements.get(id))!;
+    final park = st.others.firstWhere((x) => x.name == '박서연');
+    expect(park.amount, 0);
+    expect(park.due, -20000);
+    expect(st.toReceive, 25000);
+    expect(st.toPay, 20000);
+    // 받을 돈 쪽만 경과/추천 대상
+    final o = await repo.settlements
+        .overdue(now: DateTime.now().add(const Duration(days: 4)));
+    expect(o.map((x) => x.share.name), ['이지훈']);
+  });
 }

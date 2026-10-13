@@ -25,6 +25,9 @@ const _tables = [
   'tx_tag',
   'tx_split',
   'gap_alert',
+  'settlement_extra',
+  'group_preset',
+  'budget',
 ];
 const _skipKv = {'lock_hash', 'lock_salt', 'lock_bio', 'lock_delay', 'last_backup_at'};
 

@@ -10,35 +10,76 @@ class Person {
 }
 
 class ShareView {
-  ShareView(this.id, this.personId, this.name, this.amount, this.received);
+  ShareView(this.id, this.personId, this.name, this.amount, this.received,
+      {this.paidByThem = 0});
   final String id;
   final String? personId; // null = 나
   final String name;
-  final int amount;
-  final int received;
+  final int amount; // 이 사람이 쓴 몫
+  final int received; // 받은 돈 (내가 줄 쪽이면 내가 보낸 돈)
+  final int paidByThem; // 이 사람이 대신 낸 결제 합계
   bool get isMe => personId == null;
-  int get remaining => amount - received;
+
+  /// +면 이 사람이 나에게 줄 돈, -면 내가 이 사람에게 줄 돈.
+  int get due => amount - paidByThem;
+  bool get iOwe => !isMe && due < 0;
+  int get remaining => due.abs() - received;
 }
 
+/// 다른 사람이 낸 결제 (내 거래 내역에는 없는 돈).
+class ExtraItem {
+  ExtraItem(this.id, this.payer, this.title, this.amount);
+  final String id;
+  final String payer;
+  final String title;
+  final int amount;
+}
+
+class ExtraInput {
+  ExtraInput(this.payer, this.title, this.amount);
+  final String payer;
+  final String title;
+  final int amount;
+}
+
+/// 정산 한 건. 모든 사람은 '나'와만 주고받는다고 보고 사람별 순액을 계산한다.
 class SettlementView {
-  SettlementView(this.id, this.title, this.createdAt, this.items, this.shares);
+  SettlementView(this.id, this.title, this.createdAt, this.items, this.shares,
+      [this.extras = const []]);
   final String id;
   final String title;
   final DateTime createdAt;
-  final List<TxRow> items;
+  final List<TxRow> items; // 내가 낸 결제
   final List<ShareView> shares;
+  final List<ExtraItem> extras; // 다른 사람이 낸 결제
 
-  int get total => items.fold(0, (a, t) => a + t.amount);
+  int get myPaid => items.fold(0, (a, t) => a + t.amount);
+  int get total => myPaid + extras.fold(0, (a, e) => a + e.amount);
   int get myShare => shares.where((s) => s.isMe).fold(0, (a, s) => a + s.amount);
   List<ShareView> get others => shares.where((s) => !s.isMe).toList();
-  int get toReceive => others.fold(0, (a, s) => a + s.amount);
-  int get received => others.fold(0, (a, s) => a + s.received);
-  int get outstanding => toReceive - received;
+  List<ShareView> get owesMe => others.where((s) => s.due > 0).toList();
+  List<ShareView> get iOweList => others.where((s) => s.iOwe).toList();
 
-  /// open: 한 푼도 못 받음 / partial: 일부 / done: 전부 받음
+  int get toReceive => owesMe.fold(0, (a, s) => a + s.due);
+  int get received => owesMe.fold(0, (a, s) => a + s.received);
+  int get outstanding => toReceive - received;
+  int get toPay => iOweList.fold(0, (a, s) => a - s.due);
+  int get sent => iOweList.fold(0, (a, s) => a + s.received);
+  int get payOutstanding => toPay - sent;
+
+  /// 내 결제 중 '내 지출'로 남길 금액. 내가 보낼 돈은 송금 거래가 따로 지출로 잡히므로 뺀다.
+  /// ponytail: 내가 한 푼도 안 냈는데 받을 돈도 있는 경우(나를 거쳐 전달)는 지출이 조금 과하게 잡힌다.
+  int get myItemsTarget {
+    final t = myShare - toPay;
+    if (t < 0) return 0;
+    return t > myPaid ? myPaid : t;
+  }
+
+  /// open: 아직 아무것도 안 오감 / partial: 일부 / done: 모두 정리
   String get status {
-    if (others.isEmpty || outstanding <= 0) return 'done';
-    return received > 0 ? 'partial' : 'open';
+    final open = others.where((s) => s.due != 0 && s.remaining > 0).toList();
+    if (open.isEmpty) return 'done';
+    return others.any((s) => s.received > 0) ? 'partial' : 'open';
   }
 }
 
@@ -129,6 +170,8 @@ class SettlementRepo {
       settlement_id TEXT, tx_id TEXT, PRIMARY KEY(settlement_id, tx_id))''');
     await d.execute('''CREATE TABLE IF NOT EXISTS settlement_share(
       id TEXT PRIMARY KEY, settlement_id TEXT, person_id TEXT, amount INTEGER)''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS settlement_extra(
+      id TEXT PRIMARY KEY, settlement_id TEXT, payer TEXT, title TEXT, amount INTEGER)''');
     await d.execute('''CREATE TABLE IF NOT EXISTS settlement_payment(
       id TEXT PRIMARY KEY, share_id TEXT, tx_id TEXT, amount INTEGER)''');
   }
@@ -162,8 +205,16 @@ class SettlementRepo {
     required String title,
     required List<String> txIds,
     required List<ShareInput> shares,
+    List<ExtraInput> extras = const [],
   }) async {
     final id = _id();
+    // 결제한 사람이 몫 목록에 없으면 몫 0으로 넣어 순액 계산에 포함한다.
+    final names = {for (final s in shares) s.name?.trim()};
+    shares = [
+      ...shares,
+      for (final p in {for (final e in extras) e.payer.trim()})
+        if (!names.contains(p)) ShareInput(p, 0),
+    ];
     await _db.transaction((t) async {
       await t.insert('settlement', {
         'id': id,
@@ -172,6 +223,15 @@ class SettlementRepo {
       });
       for (final x in txIds) {
         await t.insert('settlement_item', {'settlement_id': id, 'tx_id': x});
+      }
+      for (final e in extras) {
+        await t.insert('settlement_extra', {
+          'id': _id(),
+          'settlement_id': id,
+          'payer': e.payer.trim(),
+          'title': e.title,
+          'amount': e.amount,
+        });
       }
       for (final s in shares) {
         String? pid;
@@ -217,15 +277,28 @@ class SettlementRepo {
         IFNULL((SELECT SUM(amount) FROM settlement_payment WHERE share_id=s.id),0) AS received
       FROM settlement_share s LEFT JOIN person p ON p.id=s.person_id
       WHERE s.settlement_id=? ORDER BY (s.person_id IS NOT NULL), p.name''', [id]);
+    final ex = (await _db.query('settlement_extra',
+            where: 'settlement_id=?', whereArgs: [id], orderBy: 'rowid'))
+        .map((m) => ExtraItem(m['id'] as String, m['payer'] as String,
+            (m['title'] ?? '') as String, m['amount'] as int))
+        .toList();
+    final paidBy = <String, int>{};
+    for (final e in ex) {
+      paidBy[e.payer] = (paidBy[e.payer] ?? 0) + e.amount;
+    }
     return SettlementView(
       id,
       s.first['title'] as String,
       DateTime.fromMillisecondsSinceEpoch(s.first['created_at'] as int),
       items.map(TxRow.fromMap).toList(),
-      shares
-          .map((m) => ShareView(m['id'] as String, m['person_id'] as String?,
-              m['name'] as String, m['amount'] as int, m['received'] as int))
-          .toList(),
+      shares.map((m) {
+        final name = m['name'] as String;
+        final isMe = m['person_id'] == null;
+        return ShareView(m['id'] as String, m['person_id'] as String?, name,
+            m['amount'] as int, m['received'] as int,
+            paidByThem: isMe ? 0 : (paidBy[name] ?? 0));
+      }).toList(),
+      ex,
     );
   }
 
@@ -277,7 +350,7 @@ class SettlementRepo {
     for (final st in await all()) {
       final age = today.difference(st.createdAt).inDays;
       if (age < days) continue;
-      for (final sh in st.others.where((x) => x.remaining > 0)) {
+      for (final sh in st.owesMe.where((x) => x.remaining > 0)) {
         out.add(OverdueItem(st, sh, age));
       }
     }
@@ -292,6 +365,31 @@ class SettlementRepo {
     final r = await _db.rawQuery('''SELECT t.*,
         IFNULL((SELECT SUM(amount) FROM settlement_payment WHERE tx_id=t.id),0) AS paid
       FROM tx t WHERE t.type='income' AND t.deleted_at IS NULL AND t.occurred_at>=?
+      ORDER BY t.occurred_at DESC''', [since]);
+    final aliases = await _aliasesOf(personName);
+    final out = <DepositCandidate>[];
+    for (final m in r) {
+      final free = (m['amount'] as int) - (m['paid'] as int);
+      if (free <= 0) continue;
+      final who = (m['counterparty'] ?? m['merchant'] ?? '') as String;
+      final match = who.isNotEmpty && aliases.any((a) => who == a || who.contains(a));
+      out.add(DepositCandidate(TxRow.fromMap(m), free, match));
+    }
+    out.sort((a, b) {
+      if (a.nameMatch != b.nameMatch) return a.nameMatch ? -1 : 1;
+      return b.tx.occurredAt.compareTo(a.tx.occurredAt);
+    });
+    return out;
+  }
+
+  /// 내가 줄 돈에 연결할 송금(지출) 후보. 정산 결제로 묶인 지출은 제외한다.
+  Future<List<DepositCandidate>> outgoingCandidates(String personName) async {
+    final since = DateTime.now().subtract(const Duration(days: 120)).millisecondsSinceEpoch;
+    final r = await _db.rawQuery('''SELECT t.*,
+        IFNULL((SELECT SUM(amount) FROM settlement_payment WHERE tx_id=t.id),0) AS paid
+      FROM tx t WHERE t.type='expense' AND t.amount>0 AND t.deleted_at IS NULL AND t.occurred_at>=?
+        AND t.id NOT IN (SELECT i.tx_id FROM settlement_item i
+                         JOIN settlement s ON s.id=i.settlement_id AND s.deleted_at IS NULL)
       ORDER BY t.occurred_at DESC''', [since]);
     final aliases = await _aliasesOf(personName);
     final out = <DepositCandidate>[];
@@ -346,7 +444,7 @@ class SettlementRepo {
     final out = <LinkSuggestion>[];
     final used = <String>{};
     for (final st in await all()) {
-      for (final sh in st.others.where((x) => x.remaining > 0)) {
+      for (final sh in st.owesMe.where((x) => x.remaining > 0)) {
         final cands = (await candidates(sh.name))
             .where((c) => !used.contains(c.tx.id))
             .toList();
@@ -382,13 +480,14 @@ class SettlementRepo {
     final r = await _db.query('settlement', where: 'deleted_at IS NULL', columns: ['id']);
     for (final m in r) {
       final v = await get(m['id'] as String);
-      if (v == null || v.total == 0) continue;
-      var left = v.myShare;
+      if (v == null || v.myPaid == 0) continue;
+      final target = v.myItemsTarget;
+      var left = target;
       for (var i = 0; i < v.items.length; i++) {
         final t = v.items[i];
         final mine = i == v.items.length - 1
             ? left
-            : (t.amount * v.myShare / v.total).round();
+            : (t.amount * target / v.myPaid).round();
         left -= mine;
         out[t.id] = mine;
       }
