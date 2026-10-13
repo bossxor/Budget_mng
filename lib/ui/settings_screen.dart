@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../app_state.dart';
+import '../data/settlement_repo.dart';
 import '../lock.dart';
 import 'extras_screens.dart';
 import 'screens.dart';
@@ -176,6 +177,7 @@ Future<void> _editText(BuildContext context,
     required String hint,
     String? help,
     required String initial,
+    int maxLines = 1,
     required Future<void> Function(String) onSave}) {
   final ctl = TextEditingController(text: initial);
   return showModalBottomSheet(
@@ -197,11 +199,14 @@ Future<void> _editText(BuildContext context,
         TextField(
           controller: ctl,
           autofocus: true,
+          maxLines: maxLines,
           decoration: InputDecoration(hintText: hint),
-          onSubmitted: (v) async {
-            await onSave(v.trim());
-            if (ctx.mounted) Navigator.pop(ctx);
-          },
+          onSubmitted: maxLines > 1
+              ? null
+              : (v) async {
+                  await onSave(v.trim());
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
         ),
         const SizedBox(height: 16),
         SizedBox(
@@ -326,6 +331,19 @@ class SettingsScreen extends StatelessWidget {
               help: '정산 요청 문구 아래에 같이 보내져요.',
               initial: s.payAccount,
               onSave: s.setPayAccount),
+        ),
+        _Row(
+          icon: Icons.chat_bubble_outline_rounded,
+          color: Dsn.mint,
+          title: '요청 문구',
+          value: s.requestTemplate.replaceAll('\n', ' / '),
+          onTap: () => _editText(context,
+              title: '요청 문구',
+              hint: defaultRequestTemplate,
+              help: '{이름} {정산명} {금액} {계좌}가 자동으로 채워져요.',
+              initial: s.requestTemplate,
+              maxLines: 4,
+              onSave: s.setRequestTemplate),
         ),
         _Row(
           icon: Icons.person_rounded,

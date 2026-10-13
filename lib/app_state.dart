@@ -40,6 +40,8 @@ class AppState extends ChangeNotifier {
   String myNames = '';
   int receivable = 0; // 아직 못 받은 정산 금액
   List<LinkSuggestion> suggestions = [];
+  List<OverdueItem> overdue = [];
+  String requestTemplate = defaultRequestTemplate;
   SavingsSummary savings = SavingsSummary(0, 0);
   List<PlanStatus> plans = [];
   List<GapAlert> gaps = [];
@@ -74,6 +76,9 @@ class AppState extends ChangeNotifier {
     receivable =
         (await repo.settlements.all()).fold(0, (a, x) => a + x.outstanding);
     suggestions = await repo.settlements.suggestions();
+    overdue = await repo.settlements.overdue();
+    requestTemplate =
+        (await repo.getKv('req_template')) ?? defaultRequestTemplate;
     savings = await repo.planning.savings(month);
     plans = await repo.planning.status(month);
     gaps = await repo.gaps();
@@ -201,6 +206,18 @@ class AppState extends ChangeNotifier {
     await repo.purgeRaw(d);
     notifyListeners();
   }
+
+  Future<void> setRequestTemplate(String v) async {
+    requestTemplate = v.trim().isEmpty ? defaultRequestTemplate : v;
+    await repo.setKv('req_template', requestTemplate);
+    notifyListeners();
+  }
+
+  String requestText(OverdueItem o) => buildRequestText(requestTemplate,
+      name: o.share.name,
+      title: o.settlement.title,
+      amount: o.share.remaining,
+      account: payAccount);
 
   Future<void> setPayAccount(String v) async {
     payAccount = v;

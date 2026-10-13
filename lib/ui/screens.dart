@@ -5,6 +5,8 @@ import '../data/repo.dart';
 import 'accounts_screen.dart';
 import 'extras_screens.dart';
 import 'settings_screen.dart';
+import 'package:share_plus/share_plus.dart';
+
 import 'settlement_screens.dart';
 import 'theme.dart';
 
@@ -375,6 +377,34 @@ class HomeScreen extends StatelessWidget {
                   : '마지막 백업 ${DateTime.now().difference(s.lastBackupAt!).inDays}일 전'),
               trailing: FilledButton.tonal(
                   onPressed: () => exportBackup(context, s), child: const Text('백업')),
+            ),
+          ),
+        for (final o in s.overdue.take(2))
+          Card(
+            color: const Color(0xFFFFEFE0),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+              child: Row(children: [
+                const Icon(Icons.hourglass_bottom_rounded, color: Color(0xFFB25E00)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${o.share.name}님 ${fmt(o.share.remaining)}원 아직이에요',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700, color: Color(0xFF6B3A00))),
+                    Text('${o.settlement.title} · ${o.days}일 지났어요',
+                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B3A00))),
+                  ]),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 38),
+                      backgroundColor: const Color(0xFFB25E00)),
+                  onPressed: () => SharePlus.instance
+                      .share(ShareParams(text: s.requestText(o))),
+                  child: const Text('다시 요청'),
+                ),
+              ]),
             ),
           ),
         for (final g in s.suggestions.take(3))

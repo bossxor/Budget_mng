@@ -138,6 +138,7 @@ class _Part {
 class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
   List<TxRow> _candidates = [];
   List<Person> _people = [];
+  List<GroupPreset> _presets = [];
   final _picked = <String>{};
   final _title = TextEditingController();
   final _newName = TextEditingController();
@@ -157,10 +158,12 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
     final r = widget.s.repo.settlements;
     final c = await r.settleableExpenses();
     final p = await r.people();
+    final pr = await r.presets();
     if (!mounted) return;
     setState(() {
       _candidates = c;
       _people = p;
+      _presets = pr;
     });
   }
 
@@ -274,6 +277,30 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
             _split();
           },
         ),
+        if (_presets.isNotEmpty) ...[
+          const Text('자주 만나는 모임'),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            for (final g in _presets)
+              InputChip(
+                avatar: const Icon(Icons.groups_rounded, size: 18),
+                label: Text('${g.name} ${g.members.length}명'),
+                onPressed: () {
+                  setState(() {
+                    _selectedNames
+                      ..clear()
+                      ..addAll(g.members);
+                  });
+                  _split();
+                },
+                onDeleted: () async {
+                  await widget.s.repo.settlements.deletePreset(g.id);
+                  await _load();
+                },
+              ),
+          ]),
+          const SizedBox(height: 12),
+        ],
         const Text('함께한 사람'),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 4, children: [
@@ -295,6 +322,41 @@ class _CreateSettlementScreenState extends State<CreateSettlementScreen> {
               },
             ),
         ]),
+        if (_selectedNames.length >= 2)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () async {
+                final ctl = TextEditingController();
+                final name = await showDialog<String>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('모임으로 저장'),
+                    content: TextField(
+                      controller: ctl,
+                      autofocus: true,
+                      decoration: const InputDecoration(hintText: '예: 동창 모임'),
+                    ),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('취소')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+                          child: const Text('저장')),
+                    ],
+                  ),
+                );
+                if (name != null && name.isNotEmpty) {
+                  await widget.s.repo.settlements
+                      .savePreset(name, List.of(_selectedNames));
+                  await _load();
+                }
+              },
+              icon: const Icon(Icons.bookmark_add_outlined, size: 18),
+              label: const Text('이 멤버를 모임으로 저장'),
+            ),
+          ),
         const SizedBox(height: 8),
         Row(children: [
           Expanded(
@@ -364,11 +426,12 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
       setState(() => _f = widget.s.repo.settlements.get(widget.id));
 
   Future<void> _share(SettlementView st, ShareView sh) async {
-    final acct = await widget.s.repo.getKv('pay_account') ?? '';
-    final text = StringBuffer()
-      ..write('${sh.name}님, "${st.title}" 정산 ${fmt(sh.remaining)}원 보내주세요.');
-    if (acct.isNotEmpty) text.write('\n$acct');
-    await SharePlus.instance.share(ShareParams(text: text.toString()));
+    final text = buildRequestText(widget.s.requestTemplate,
+        name: sh.name,
+        title: st.title,
+        amount: sh.remaining,
+        account: widget.s.payAccount);
+    await SharePlus.instance.share(ShareParams(text: text));
   }
 
   Future<void> _link(SettlementView st, ShareView sh) async {

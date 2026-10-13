@@ -146,4 +146,55 @@ void main() {
     await repo.settlements.pay(g.share, g.deposit, g.amount);
     expect(await repo.settlements.suggestions(), isEmpty);
   });
+
+  test('요청 문구 템플릿: 치환하고 계좌가 없으면 그 줄을 뺀다', () {
+    final withAcct = buildRequestText(defaultRequestTemplate,
+        name: '박서연', title: '회식', amount: 57500, account: '카뱅 3333');
+    expect(withAcct, '박서연님, "회식" 정산 57,500원 보내주세요.\n카뱅 3333');
+    final noAcct = buildRequestText(defaultRequestTemplate,
+        name: '박서연', title: '회식', amount: 57500);
+    expect(noAcct, '박서연님, "회식" 정산 57,500원 보내주세요.');
+    final custom = buildRequestText('{이름} {금액}원 부탁해',
+        name: '민수', title: 'x', amount: 1000);
+    expect(custom, '민수 1,000원 부탁해');
+    expect(
+        buildRequestText('  ', name: 'a', title: 'b', amount: 1, account: 'c'),
+        'a님, "b" 정산 1원 보내주세요.\nc');
+  });
+
+  test('모임 프리셋 저장·수정·삭제', () async {
+    await repo.settlements.savePreset('동창 모임', ['김민수', '이지훈']);
+    await repo.settlements.savePreset('동창 모임', ['김민수', '이지훈', '박서연']);
+    await repo.settlements.savePreset('', ['x']); // 이름 없으면 무시
+    var p = await repo.settlements.presets();
+    expect(p.length, 1);
+    expect(p.single.members, ['김민수', '이지훈', '박서연']);
+    await repo.settlements.deletePreset(p.single.id);
+    expect(await repo.settlements.presets(), isEmpty);
+  });
+
+  test('미수금 경과: 3일이 지나고 못 받은 몫만 오래된 순으로', () async {
+    final e = await tx('expense', 60000, '저녁', day: 2);
+    await repo.settlements.create(title: '저녁', txIds: [e.id], shares: [
+      ShareInput(null, 20000),
+      ShareInput('김민수', 20000),
+      ShareInput('이지훈', 20000),
+    ]);
+    // 방금 만든 정산은 아직 경과 대상이 아니다.
+    expect(await repo.settlements.overdue(), isEmpty);
+    final later = DateTime.now().add(const Duration(days: 5));
+    var o = await repo.settlements.overdue(now: later);
+    expect(o.map((x) => x.share.name).toSet(), {'김민수', '이지훈'});
+    expect(o.first.days, greaterThanOrEqualTo(4));
+
+    // 김민수가 보내면 이지훈만 남는다.
+    final dep = await tx('income', 20000, '김민수', day: 3);
+    final kim = (await repo.settlements.all()).first.others
+        .firstWhere((x) => x.name == '김민수');
+    final c = (await repo.settlements.candidates('김민수'))
+        .firstWhere((x) => x.tx.id == dep.id);
+    await repo.settlements.pay(kim, c, 20000);
+    o = await repo.settlements.overdue(now: later);
+    expect(o.map((x) => x.share.name), ['이지훈']);
+  });
 }

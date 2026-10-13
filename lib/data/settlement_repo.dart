@@ -59,6 +59,52 @@ class LinkSuggestion {
   int get amount => deposit.free < share.remaining ? deposit.free : share.remaining;
 }
 
+/// 자주 만나는 멤버 조합.
+class GroupPreset {
+  GroupPreset(this.id, this.name, this.members);
+  final String id;
+  final String name;
+  final List<String> members;
+}
+
+/// 정산한 지 며칠이 지나도 못 받은 몫.
+class OverdueItem {
+  OverdueItem(this.settlement, this.share, this.days);
+  final SettlementView settlement;
+  final ShareView share;
+  final int days;
+}
+
+const defaultRequestTemplate = '{이름}님, "{정산명}" 정산 {금액}원 보내주세요.\n{계좌}';
+
+String _won(int n) {
+  final s = n.abs().toString();
+  final b = StringBuffer(n < 0 ? '-' : '');
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+    b.write(s[i]);
+  }
+  return b.toString();
+}
+
+/// 요청 문구 템플릿을 채운다. 계좌가 비어 있으면 그 줄은 빼서 빈 줄이 남지 않게 한다.
+String buildRequestText(String template,
+    {required String name,
+    required String title,
+    required int amount,
+    String account = ''}) {
+  final t = template.trim().isEmpty ? defaultRequestTemplate : template;
+  final filled = t
+      .replaceAll('{이름}', name)
+      .replaceAll('{정산명}', title)
+      .replaceAll('{금액}', _won(amount))
+      .replaceAll('{계좌}', account);
+  return filled
+      .split('\n')
+      .where((l) => l.trim().isNotEmpty)
+      .join('\n');
+}
+
 class ShareInput {
   ShareInput(this.name, this.amount);
   final String? name; // null = 나
@@ -75,6 +121,8 @@ class SettlementRepo {
   static Future<void> schema(Database d) async {
     await d.execute('''CREATE TABLE IF NOT EXISTS person(
       id TEXT PRIMARY KEY, name TEXT UNIQUE, aliases TEXT DEFAULT '')''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS group_preset(
+      id TEXT PRIMARY KEY, name TEXT, members TEXT)''');
     await d.execute('''CREATE TABLE IF NOT EXISTS settlement(
       id TEXT PRIMARY KEY, title TEXT, created_at INTEGER, deleted_at INTEGER)''');
     await d.execute('''CREATE TABLE IF NOT EXISTS settlement_item(
@@ -188,6 +236,53 @@ class SettlementRepo {
     await _db.delete('settlement_payment',
         where: 'share_id IN (SELECT id FROM settlement_share WHERE settlement_id=?)',
         whereArgs: [id]);
+  }
+
+  // ---- 모임 프리셋 ----
+  Future<List<GroupPreset>> presets() async {
+    final r = await _db.query('group_preset', orderBy: 'name');
+    return r
+        .map((m) => GroupPreset(
+            m['id'] as String,
+            m['name'] as String,
+            ((m['members'] as String?) ?? '')
+                .split(',')
+                .where((x) => x.isNotEmpty)
+                .toList()))
+        .toList();
+  }
+
+  /// 같은 이름이면 멤버만 바꾼다.
+  Future<void> savePreset(String name, List<String> members) async {
+    final n = name.trim();
+    if (n.isEmpty || members.isEmpty) return;
+    final cur = await _db.query('group_preset', where: 'name=?', whereArgs: [n]);
+    final value = members.join(',');
+    if (cur.isEmpty) {
+      await _db.insert('group_preset', {'id': _id(), 'name': n, 'members': value});
+    } else {
+      await _db.update('group_preset', {'members': value},
+          where: 'id=?', whereArgs: [cur.first['id']]);
+    }
+  }
+
+  Future<void> deletePreset(String id) =>
+      _db.delete('group_preset', where: 'id=?', whereArgs: [id]);
+
+  // ---- 미수금 경과 ----
+  /// 정산한 지 [days]일이 지났는데 아직 못 받은 몫. 오래된 순.
+  Future<List<OverdueItem>> overdue({int days = 3, DateTime? now}) async {
+    final today = now ?? DateTime.now();
+    final out = <OverdueItem>[];
+    for (final st in await all()) {
+      final age = today.difference(st.createdAt).inDays;
+      if (age < days) continue;
+      for (final sh in st.others.where((x) => x.remaining > 0)) {
+        out.add(OverdueItem(st, sh, age));
+      }
+    }
+    out.sort((a, b) => b.days.compareTo(a.days));
+    return out;
   }
 
   // ---- 입금 연결 ----
