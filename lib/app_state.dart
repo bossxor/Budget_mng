@@ -46,6 +46,8 @@ class AppState extends ChangeNotifier {
   List<SourceStatus> sources = [];
   DateTime? lastBackupAt;
   int rawKeepDays = 90;
+  DateTime? bgLastRun; // 마지막 백그라운드 처리 시각
+  int bgTotalSaved = 0; // 백그라운드에서 변환한 거래 수 누계
   String payAccount = '';
   final lock = AppLock();
 
@@ -79,6 +81,9 @@ class AppState extends ChangeNotifier {
     final lb = int.tryParse(await repo.getKv('last_backup_at') ?? '');
     lastBackupAt = lb == null ? null : DateTime.fromMillisecondsSinceEpoch(lb);
     rawKeepDays = int.tryParse(await repo.getKv('raw_keep_days') ?? '') ?? 90;
+    final bg = int.tryParse(await repo.getKv('bg_last_run') ?? '');
+    bgLastRun = bg == null ? null : DateTime.fromMillisecondsSinceEpoch(bg);
+    bgTotalSaved = int.tryParse(await repo.getKv('bg_total_saved') ?? '') ?? 0;
     try {
       listenerOn = await _channel.invokeMethod<bool>('isListenerEnabled') ?? false;
     } catch (_) {

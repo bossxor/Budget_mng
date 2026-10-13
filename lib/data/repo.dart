@@ -448,6 +448,16 @@ class Repo {
            text LIKE '%취소%' OR text LIKE '%결제%' OR text LIKE '%이체%' OR
            text LIKE '%송금%' OR text LIKE '%잔액%'))''');
 
+  /// 알림 서비스가 화면 없이 호출하는 처리. 끝난 시각과 건수를 남겨 설정 화면에서 확인할 수 있다.
+  Future<int> runBackgroundIngest({DateTime? now}) async {
+    final n = await processPending();
+    await setKv('bg_last_run', '${(now ?? DateTime.now()).millisecondsSinceEpoch}');
+    await setKv('bg_last_saved', '$n');
+    final total = int.tryParse(await getKv('bg_total_saved') ?? '') ?? 0;
+    await setKv('bg_total_saved', '${total + n}');
+    return n;
+  }
+
   /// 앱이 죽어서 처리 중으로 남은 알림을 다시 대기 상태로 돌린다 (앱 시작 시 한 번).
   Future<void> recoverClaims() => _db
       .rawUpdate('UPDATE raw_notification SET state=0 WHERE state=3');

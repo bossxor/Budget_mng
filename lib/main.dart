@@ -14,7 +14,7 @@ Future<void> backgroundMain() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     final repo = await Repo.open();
-    await repo.processPending();
+    await repo.runBackgroundIngest();
   } catch (_) {
     // 실패해도 원문은 남아 있어 앱을 열 때 다시 처리된다.
   } finally {

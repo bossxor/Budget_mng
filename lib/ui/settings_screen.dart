@@ -390,6 +390,14 @@ class SettingsScreen extends StatelessWidget {
           trailing: TextButton(
               onPressed: s.openListenerSettings, child: const Text('권한')),
         ),
+        _Row(
+          icon: Icons.bolt_rounded,
+          color: Dsn.amber,
+          title: '백그라운드 처리',
+          value: s.bgLastRun == null
+              ? '아직 없어요 (알림이 오면 앱을 열지 않아도 바로 변환해요)'
+              : '마지막 ${_ago(s.bgLastRun!)} · 지금까지 ${s.bgTotalSaved}건',
+        ),
         for (final src in s.sources)
           _Row(
             icon: Icons.sms_rounded,
