@@ -1,0 +1,203 @@
+// 알림 원문 -> ParsedTx. 수집원별 정규식 템플릿 (DESIGN.md 12절).
+
+class ParsedTx {
+  ParsedTx({
+    required this.source,
+    required this.type,
+    required this.amount,
+    required this.occurredAt,
+    this.merchant,
+    this.counterparty,
+    this.account,
+    this.balance,
+    this.card,
+    this.installment,
+    this.installmentMonths,
+    this.cumulative,
+    this.kind,
+    this.via,
+    this.actor,
+    this.category,
+  });
+
+  final String source;
+  String type; // expense | income | transfer | group
+  final int amount;
+  final DateTime occurredAt;
+  final String? merchant;
+  final String? counterparty;
+  final String? account;
+  final int? balance;
+  final String? card;
+  final String? installment;
+  final int? installmentMonths;
+  final int? cumulative;
+  final String? kind;
+  final String? via;
+  final String? actor;
+  String? category;
+
+  /// 가맹점/상대 표시용 이름.
+  String get title => merchant ?? counterparty ?? '(알 수 없음)';
+
+  String _iso(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}'
+      'T${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  Map<String, Object?> toMap() => {
+        'source': source,
+        'type': type,
+        'amount': amount,
+        'occurred_at': _iso(occurredAt),
+        'merchant': merchant,
+        'counterparty': counterparty,
+        'account': account,
+        'balance': balance,
+        'card': card,
+        'installment': installment,
+        'installment_months': installmentMonths,
+        'cumulative': cumulative,
+        'kind': kind,
+        'via': via,
+        'actor': actor,
+        'category': category,
+      };
+}
+
+String _normalize(String s) => s
+    .replaceAll('\r\n', '\n')
+    .replaceAll('　', ' ')
+    .split('\n')
+    .map((l) => l.trimRight())
+    .join('\n')
+    .trim();
+
+int _n(String s) => int.parse(s.replaceAll(',', ''));
+
+/// 본문에 연도가 없어서 수신 시각 기준으로 추정. 미래 날짜면 전년도.
+DateTime _inferDate(DateTime received, int m, int d, int hh, int mm) {
+  var c = DateTime(received.year, m, d, hh, mm);
+  if (c.isAfter(received.add(const Duration(days: 1)))) {
+    c = DateTime(received.year - 1, m, d, hh, mm);
+  }
+  return c;
+}
+
+final _card = RegExp(
+    r'^(\S+?)(\d{4})(승인취소|승인|취소)\s+(\S+)\n(-?[\d,]+)원\s*(일시불|\d+개월)\n(\d\d)/(\d\d)\s+(\d\d):(\d\d)\s+(.+)\n누적([\d,]+)원',
+    multiLine: true);
+final _kakaoBank = RegExp(
+    r'^(입금|출금)\s+([\d,]+)원\n(.+?)\s*(?:->|→)\s*(.+?)\s*\n잔액\s*([\d,]+)원',
+    multiLine: true);
+final _sms = RegExp(
+    r'^(입금|출금)\n(\d\d)/(\d\d)\s+(\d\d):(\d\d)\s+([\d,]+)\n계좌\s+(\S+)\n내용[ \t]*(.*)\n(?:메모[ \t]*(.*)\n)?잔액\s+([\d,]+)',
+    multiLine: true);
+final _tossGroup = RegExp(
+    r'\[출금 안내\]\n(.+?)에서\n([\d,]+)원이 출금됐어요\.\n(\d\d)/(\d\d)\s+(\d\d):(\d\d)\n(.+)\n거래한 모임원\s*:\s*(.+)');
+final _tossMove = RegExp(r'^([\d,]+)원 (입금|출금)\n(.+?)\s*(?:->|→)\s*(.+)$',
+    multiLine: true);
+final _viaName = RegExp(r'^(토스|카카오페이|카카오뱅크)\s+(.+)$');
+
+/// 지원하는 모든 템플릿을 순서대로 시도한다. 맞는 게 없으면 null.
+ParsedTx? parseNotification(String raw, DateTime received) {
+  final t = _normalize(raw);
+
+  var m = _card.firstMatch(t);
+  if (m != null) {
+    final cancel = m[3]!.contains('취소');
+    var amt = _n(m[5]!);
+    if (cancel && amt > 0) amt = -amt;
+    final inst = m[6]!;
+    return ParsedTx(
+      source: 'card',
+      type: 'expense',
+      amount: amt,
+      occurredAt: _inferDate(received, int.parse(m[7]!), int.parse(m[8]!),
+          int.parse(m[9]!), int.parse(m[10]!)),
+      merchant: m[11],
+      card: '${m[1]}${m[2]}',
+      installment: inst,
+      installmentMonths:
+          inst == '일시불' ? null : int.parse(inst.replaceAll('개월', '')),
+      cumulative: _n(m[12]!),
+      kind: cancel ? 'cancel' : 'approve',
+    );
+  }
+
+  m = _kakaoBank.firstMatch(t);
+  if (m != null) {
+    final incoming = m[1] == '입금';
+    final from = m[3]!, to = m[4]!;
+    return ParsedTx(
+      source: 'kakaobank',
+      type: incoming ? 'income' : 'expense',
+      amount: _n(m[2]!),
+      occurredAt: received, // 알림에 시각 없음
+      counterparty: incoming ? from : to,
+      account: incoming ? to : from,
+      balance: _n(m[5]!),
+    );
+  }
+
+  m = _sms.firstMatch(t);
+  if (m != null) {
+    final incoming = m[1] == '입금';
+    final desc = (m[8] ?? '').trim();
+    final memo = (m[9] ?? '').trim();
+    String? via;
+    String? who = desc.isNotEmpty ? desc : null;
+    if (who == null && memo.isNotEmpty) {
+      final vn = _viaName.firstMatch(memo);
+      if (vn != null) {
+        via = vn[1];
+        who = vn[2];
+      } else {
+        who = memo;
+      }
+    }
+    return ParsedTx(
+      source: 'sms',
+      type: incoming ? 'income' : 'expense',
+      amount: _n(m[6]!),
+      occurredAt: _inferDate(received, int.parse(m[2]!), int.parse(m[3]!),
+          int.parse(m[4]!), int.parse(m[5]!)),
+      counterparty: who,
+      account: m[7],
+      balance: _n(m[10]!),
+      via: via,
+    );
+  }
+
+  m = _tossGroup.firstMatch(t);
+  if (m != null) {
+    return ParsedTx(
+      source: 'toss',
+      type: 'group',
+      amount: _n(m[2]!),
+      occurredAt: _inferDate(received, int.parse(m[3]!), int.parse(m[4]!),
+          int.parse(m[5]!), int.parse(m[6]!)),
+      account: m[1],
+      counterparty: m[7],
+      actor: m[8],
+    );
+  }
+
+  m = _tossMove.firstMatch(t);
+  if (m != null) {
+    final incoming = m[2] == '입금';
+    return ParsedTx(
+      source: 'toss',
+      type: incoming ? 'income' : 'expense',
+      amount: _n(m[1]!),
+      occurredAt: received,
+      counterparty: incoming ? m[3] : m[4],
+      account: incoming ? m[4] : m[3],
+    );
+  }
+
+  return null;
+}
+
+/// 알림의 제목과 본문을 한 덩어리로 합친다. 카카오뱅크처럼 '입금 82원'이 제목에 오는 경우가 있다.
+String joinNotification(String? title, String text) =>
+    (title == null || title.trim().isEmpty) ? text : '${title.trim()}\n$text';

@@ -1,0 +1,895 @@
+import 'package:flutter/material.dart';
+
+import '../app_state.dart';
+import '../data/repo.dart';
+import '../lock.dart';
+import 'accounts_screen.dart';
+import 'settlement_screens.dart';
+import 'theme.dart';
+
+String fmt(int n) {
+  final s = n.abs().toString();
+  final b = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+    b.write(s[i]);
+  }
+  return b.toString();
+}
+
+const _weekday = ['월', '화', '수', '목', '금', '토', '일'];
+String dayLabel(DateTime d) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final diff = today.difference(DateTime(d.year, d.month, d.day)).inDays;
+  final base = '${d.month}월 ${d.day}일 ${_weekday[d.weekday - 1]}요일';
+  if (diff == 0) return '오늘 · $base';
+  if (diff == 1) return '어제 · $base';
+  return base;
+}
+
+const categories = [
+  '식비', '카페', '편의점', '배달', '교통', '쇼핑', '구독', '의료', '생활', '문화/여가',
+  '경조사', '송금', '기타',
+];
+
+IconData catIcon(String? c) => switch (c) {
+      '카페' => Icons.local_cafe_rounded,
+      '식비' => Icons.restaurant_rounded,
+      '편의점' => Icons.storefront_rounded,
+      '배달' => Icons.delivery_dining_rounded,
+      '교통' => Icons.directions_bus_rounded,
+      '쇼핑' => Icons.shopping_bag_rounded,
+      '구독' => Icons.subscriptions_rounded,
+      '의료' => Icons.local_hospital_rounded,
+      '송금' => Icons.send_rounded,
+      '생활' => Icons.home_rounded,
+      '문화/여가' => Icons.movie_rounded,
+      '경조사' => Icons.card_giftcard_rounded,
+      null => Icons.help_outline_rounded,
+      _ => Icons.sell_rounded,
+    };
+
+/// 금액: 지출은 −(코랄), 입금은 +(민트). 이체/모임통장은 회색. 색만이 아니라 부호도 같이 쓴다.
+class Amount extends StatelessWidget {
+  const Amount(this.t, {super.key, this.big = false});
+  final TxRow t;
+  final bool big;
+  @override
+  Widget build(BuildContext context) {
+    final grey = Theme.of(context).colorScheme.onSurfaceVariant;
+    final (sign, color) = switch (t.type) {
+      'expense' => (t.amount < 0 ? '+' : '−', Dsn.coral),
+      'income' => ('+', Dsn.mint),
+      _ => ('', grey),
+    };
+    return Text('$sign${fmt(t.amount)}원',
+        style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w700,
+            fontSize: big ? 24 : 16,
+            fontFeatures: const [FontFeature.tabularFigures()]));
+  }
+}
+
+class TxTile extends StatelessWidget {
+  const TxTile(this.t, {super.key, this.onTap});
+  final TxRow t;
+  final VoidCallback? onTap;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final grey = cs.onSurfaceVariant;
+    final (icon, color) = switch (t.type) {
+      'income' => (Icons.south_west_rounded, Dsn.mint),
+      'transfer' => (Icons.swap_horiz_rounded, grey),
+      'group' => (Icons.groups_rounded, grey),
+      _ => (catIcon(t.category), Dsn.cat(t.category)),
+    };
+    final sub = [
+      if (t.type == 'transfer') '내 계좌 간 이체',
+      if (t.type == 'group') '모임통장',
+      if (t.type == 'income') t.paid > 0 ? '입금 · 정산 ${fmt(t.paid)}원 연결' : '입금',
+      if (t.type == 'expense') t.category ?? '미분류',
+      if (t.type == 'expense' && t.mine != null) '내 몫 ${fmt(t.mine!)}원',
+      if (t.account != null) t.account!,
+    ].join(' · ');
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(children: [
+          RoundIcon(icon, color),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Flexible(
+                    child: Text(t.title,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
+                if (t.status == 'review')
+                  Container(
+                    margin: const EdgeInsets.only(left: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: Dsn.amber.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Text(t.memo ?? '확인 필요',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFFB27300),
+                            fontWeight: FontWeight.w600)),
+                  ),
+              ]),
+              const SizedBox(height: 2),
+              Text(sub,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12.5, color: grey)),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          if (t.type == 'transfer' || t.type == 'group')
+            Text('${fmt(t.amount)}원', style: TextStyle(color: grey, fontWeight: FontWeight.w600))
+          else
+            Amount(t),
+        ]),
+      ),
+    );
+  }
+}
+
+class Shell extends StatefulWidget {
+  const Shell(this.s, {super.key});
+  final AppState s;
+  @override
+  State<Shell> createState() => _ShellState();
+}
+
+class _ShellState extends State<Shell> {
+  int _i = 0;
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    final pages = [
+      HomeScreen(s, goHistory: () => setState(() => _i = 1)),
+      HistoryScreen(s),
+      SettlementListScreen(s),
+      AccountsScreen(s),
+      SettingsScreen(s),
+    ];
+    return Scaffold(
+      body: SafeArea(child: pages[_i]),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _i,
+        onDestinationSelected: (v) => setState(() => _i = v),
+        destinations: const [
+          NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home_rounded),
+              label: '홈'),
+          NavigationDestination(
+              icon: Icon(Icons.receipt_long_outlined),
+              selectedIcon: Icon(Icons.receipt_long_rounded),
+              label: '내역'),
+          NavigationDestination(
+              icon: Icon(Icons.groups_outlined),
+              selectedIcon: Icon(Icons.groups_rounded),
+              label: '정산'),
+          NavigationDestination(
+              icon: Icon(Icons.account_balance_wallet_outlined),
+              selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+              label: '통장'),
+          NavigationDestination(
+              icon: Icon(Icons.settings_outlined),
+              selectedIcon: Icon(Icons.settings_rounded),
+              label: '설정'),
+        ],
+      ),
+    );
+  }
+}
+
+class MonthBar extends StatelessWidget {
+  const MonthBar(this.s, {super.key});
+  final AppState s;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+                onPressed: () => s.shiftMonth(-1),
+                icon: const Icon(Icons.chevron_left_rounded)),
+            Text('${s.month.year}년 ${s.month.month}월',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            IconButton(
+                onPressed: () => s.shiftMonth(1),
+                icon: const Icon(Icons.chevron_right_rounded)),
+          ],
+        ),
+      );
+}
+
+class _MiniStat extends StatelessWidget {
+  const _MiniStat(this.label, this.value);
+  final String label, value;
+  @override
+  Widget build(BuildContext context) => Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(18)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 12, color: Colors.white.withValues(alpha: 0.85))),
+            const SizedBox(height: 2),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(value,
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 17,
+                      fontFeatures: const [FontFeature.tabularFigures()])),
+            ),
+          ]),
+        ),
+      );
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen(this.s, {super.key, required this.goHistory});
+  final AppState s;
+  final VoidCallback goHistory;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final sm = s.summary;
+    final cats = sm.byCategory.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final maxV = cats.isEmpty ? 1 : cats.first.value;
+    final net = sm.income - sm.expense;
+    final recent = s.rows.where((t) => t.type != 'group').take(4).toList();
+    return RefreshIndicator(
+      onRefresh: s.refresh,
+      child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
+        MonthBar(s),
+        if (!s.listenerOn)
+          Card(
+            color: const Color(0xFFFFE9E9),
+            child: ListTile(
+              leading: const Icon(Icons.notifications_off_rounded, color: Dsn.coral),
+              title: const Text('알림 접근이 꺼져 있어요',
+                  style: TextStyle(color: Color(0xFF8A1C1C), fontWeight: FontWeight.w700)),
+              subtitle: const Text('켜면 카드·입출금 알림이 자동으로 들어와요',
+                  style: TextStyle(color: Color(0xFF8A1C1C))),
+              trailing: FilledButton(
+                  onPressed: s.openListenerSettings,
+                  style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 36), backgroundColor: Dsn.coral),
+                  child: const Text('켜기')),
+            ),
+          ),
+        // 히어로 카드
+        Container(
+          padding: const EdgeInsets.all(20),
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(28),
+            gradient: const LinearGradient(
+              colors: [Dsn.blue, Color(0xFF7A9BFF)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('이번 달 쓴 돈',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 14)),
+            const SizedBox(height: 4),
+            Text('${fmt(sm.expense)}원',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 36,
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: [FontFeature.tabularFigures()])),
+            const SizedBox(height: 16),
+            Row(children: [
+              _MiniStat('들어온 돈', '+${fmt(sm.income)}'),
+              const SizedBox(width: 8),
+              _MiniStat('받을 돈', fmt(s.receivable)),
+              const SizedBox(width: 8),
+              _MiniStat('남은 돈', '${net < 0 ? '−' : ''}${fmt(net)}'),
+            ]),
+          ]),
+        ),
+        if (sm.reviewCount > 0)
+          Card(
+            color: const Color(0xFFFFF4DB),
+            child: ListTile(
+              leading: const Icon(Icons.priority_high_rounded, color: Color(0xFFB27300)),
+              title: Text('확인이 필요한 내역 ${sm.reviewCount}건',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w700, color: Color(0xFF6B4A00))),
+              trailing: const Icon(Icons.chevron_right_rounded, color: Color(0xFF6B4A00)),
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => ReviewScreen(s))),
+            ),
+          ),
+        for (final g in s.suggestions.take(3))
+          Card(
+            color: const Color(0xFFE6F8EF),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+              child: Row(children: [
+                const Icon(Icons.savings_rounded, color: Dsn.mint),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(
+                        '${g.share.name}님 ${fmt(g.amount)}원 입금',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700, color: Color(0xFF0F5A3C))),
+                    Text(
+                        '${g.settlement.title} 정산에 연결할까요?${g.byName ? '' : ' (금액이 같아요)'}',
+                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF0F5A3C))),
+                  ]),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 38), backgroundColor: Dsn.mint),
+                  onPressed: () async {
+                    await s.repo.settlements.pay(g.share, g.deposit, g.amount);
+                    await s.refresh();
+                  },
+                  child: const Text('연결'),
+                ),
+              ]),
+            ),
+          ),
+        if (recent.isNotEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+              child: Column(children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                  child: Row(children: [
+                    const Text('최근 내역',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    TextButton(onPressed: goHistory, child: const Text('전체 보기')),
+                  ]),
+                ),
+                for (final t in recent) TxTile(t),
+              ]),
+            ),
+          ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('어디에 썼을까요',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 12),
+              if (cats.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text('아직 지출 내역이 없어요. 알림이 오면 자동으로 채워져요.',
+                      style: TextStyle(color: cs.onSurfaceVariant)),
+                ),
+              for (final c in cats)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: Row(children: [
+                    RoundIcon(catIcon(c.key == '미분류' ? null : c.key),
+                        Dsn.cat(c.key == '미분류' ? null : c.key),
+                        size: 38),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Text(c.key, style: const TextStyle(fontWeight: FontWeight.w600)),
+                          const Spacer(),
+                          Text('${fmt(c.value)}원',
+                              style: const TextStyle(fontWeight: FontWeight.w600)),
+                        ]),
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: LinearProgressIndicator(
+                            value: c.value / maxV,
+                            minHeight: 8,
+                            color: Dsn.cat(c.key == '미분류' ? null : c.key),
+                            backgroundColor:
+                                Dsn.cat(c.key == '미분류' ? null : c.key).withValues(alpha: 0.14),
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ]),
+                ),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class HistoryScreen extends StatefulWidget {
+  const HistoryScreen(this.s, {super.key});
+  final AppState s;
+  @override
+  State<HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends State<HistoryScreen> {
+  String? _acct; // null = 전체
+
+  /// 선택한 통장에서 나간 거래: 그 통장 자체 + 대금이 그 통장에서 빠지는 카드.
+  Set<String> _keysFor(String key) => {
+        key,
+        for (final a in widget.s.accounts)
+          if (a.paysFrom == key) a.key,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.s;
+    final keys = _acct == null ? null : _keysFor(_acct!);
+    final rows = keys == null
+        ? s.rows
+        : s.rows.where((t) => t.account != null && keys.contains(t.account)).toList();
+    final groups = <DateTime, List<TxRow>>{};
+    for (final t in rows) {
+      final d = DateTime(t.occurredAt.year, t.occurredAt.month, t.occurredAt.day);
+      groups.putIfAbsent(d, () => []).add(t);
+    }
+    final days = groups.keys.toList()..sort((a, b) => b.compareTo(a));
+    final bankAccts = s.accounts
+        .where((a) => !RegExp(r'^[가-힣A-Za-z]+d{4}$').hasMatch(a.key))
+        .toList();
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => showManualEntry(context, s),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('직접 입력'),
+      ),
+      body: Column(children: [
+        MonthBar(s),
+        if (bankAccts.length > 1)
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: const Text('전체'),
+                    selected: _acct == null,
+                    onSelected: (_) => setState(() => _acct = null),
+                  ),
+                ),
+                for (final a in bankAccts)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      avatar: CircleAvatar(
+                          backgroundColor: Dsn.role(a.role), radius: 6),
+                      label: Text(a.label),
+                      selected: _acct == a.key,
+                      onSelected: (_) => setState(() => _acct = a.key),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: days.isEmpty
+              ? Center(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.inbox_rounded,
+                      size: 56, color: Theme.of(context).colorScheme.outline),
+                  const SizedBox(height: 8),
+                  const Text('이 달에는 내역이 없어요'),
+                ]))
+              : RefreshIndicator(
+                  onRefresh: s.refresh,
+                  child: ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+                      children: [
+                        for (final d in days) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+                            child: Row(children: [
+                              Expanded(
+                                  child: Text(dayLabel(d),
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.w700, fontSize: 14))),
+                              Builder(builder: (context) {
+                                final sum = groups[d]!
+                                    .where((t) => t.type == 'expense')
+                                    .fold<int>(0, (a, t) => a + t.effective);
+                                return sum == 0
+                                    ? const SizedBox.shrink()
+                                    : Text('−${fmt(sum)}원',
+                                        style: TextStyle(
+                                            fontSize: 13,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant));
+                              }),
+                            ]),
+                          ),
+                          Card(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                              child: Column(children: [
+                                for (final t in groups[d]!)
+                                  TxTile(t, onTap: () => showEditSheet(context, s, t)),
+                              ]),
+                            ),
+                          ),
+                        ],
+                      ]),
+                ),
+        ),
+      ]),
+    );
+  }
+}
+
+Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
+  return showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(t.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Amount(t, big: true),
+          const SizedBox(height: 20),
+          const Text('카테고리', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final c in categories)
+              ChoiceChip(
+                avatar: Icon(catIcon(c), size: 18, color: Dsn.cat(c)),
+                label: Text(c),
+                selected: t.category == c,
+                onSelected: (_) async {
+                  await s.repo.setCategory(t, c);
+                  await s.refresh();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+              ),
+          ]),
+          const SizedBox(height: 16),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            if (t.status == 'review')
+              FilledButton.tonal(
+                  onPressed: () async {
+                    await s.repo.confirm(t.id);
+                    await s.refresh();
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  },
+                  child: const Text('확인 완료')),
+            if (t.type != 'transfer')
+              OutlinedButton(
+                  onPressed: () async {
+                    await s.repo.setType(t.id, 'transfer');
+                    await s.refresh();
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  },
+                  child: const Text('내 계좌 간 이체로 표시')),
+            OutlinedButton(
+                onPressed: () async {
+                  await s.repo.delete(t.id);
+                  await s.refresh();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: const Text('삭제')),
+          ]),
+        ]),
+      ),
+    ),
+  );
+}
+
+Future<void> showManualEntry(BuildContext context, AppState s) {
+  final amt = TextEditingController();
+  final title = TextEditingController();
+  var type = 'expense';
+  String? error;
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setS) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'expense', label: Text('쓴 돈')),
+              ButtonSegment(value: 'income', label: Text('받은 돈')),
+            ],
+            selected: {type},
+            onSelectionChanged: (v) => setS(() => type = v.first),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: amt,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+            decoration: InputDecoration(
+                labelText: '금액', suffixText: '원', errorText: error),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: title,
+            decoration: const InputDecoration(labelText: '내용 (예: 점심, 현금 용돈)'),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () async {
+                final v = int.tryParse(amt.text.replaceAll(',', ''));
+                if (v == null || v <= 0) {
+                  setS(() => error = '금액을 입력하세요');
+                  return;
+                }
+                await s.repo.addManual(
+                    type: type,
+                    amount: v,
+                    title: title.text.trim().isEmpty ? '현금' : title.text.trim());
+                await s.refresh();
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('저장'),
+            ),
+          ),
+        ]),
+      ),
+    ),
+  );
+}
+
+class ReviewScreen extends StatefulWidget {
+  const ReviewScreen(this.s, {super.key});
+  final AppState s;
+  @override
+  State<ReviewScreen> createState() => _ReviewScreenState();
+}
+
+class _ReviewScreenState extends State<ReviewScreen> {
+  late Future<(List<TxRow>, List<Map<String, Object?>>)> _f;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  void _load() {
+    _f = () async {
+      final r = await widget.s.repo.reviewList();
+      final f = await widget.s.repo.failedRaw();
+      return (r, f);
+    }();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('확인이 필요한 내역')),
+        body: FutureBuilder(
+          future: _f,
+          builder: (context, snap) {
+            if (!snap.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final (rows, failed) = snap.data!;
+            if (rows.isEmpty && failed.isEmpty) {
+              return const Center(child: Text('확인할 내역이 없어요 🎉'));
+            }
+            return ListView(padding: const EdgeInsets.all(16), children: [
+              if (rows.isNotEmpty)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Column(children: [
+                      for (final t in rows)
+                        TxTile(t, onTap: () async {
+                          await showEditSheet(context, widget.s, t);
+                          setState(_load);
+                        }),
+                    ]),
+                  ),
+                ),
+              if (failed.isNotEmpty) ...[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(8, 12, 8, 8),
+                  child: Text('인식 못 한 알림',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+                for (final r in failed)
+                  Card(
+                    child: ListTile(
+                      title: Text((r['text'] as String).replaceAll('\n', ' '),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(r['package'] as String,
+                          style: const TextStyle(fontSize: 11)),
+                    ),
+                  ),
+              ],
+            ]);
+          },
+        ),
+      );
+}
+
+class _Section extends StatelessWidget {
+  const _Section(this.title, this.children);
+  final String title;
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+          child: Text(title,
+              style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+        Card(
+          child: SizedBox(
+            width: double.infinity,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+            ),
+          ),
+        ),
+      ]);
+}
+
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen(this.s, {super.key});
+  final AppState s;
+  @override
+  Widget build(BuildContext context) {
+    final names = TextEditingController(text: s.myNames);
+    final acct = TextEditingController(text: s.payAccount);
+    return ListView(padding: const EdgeInsets.all(16), children: [
+      _Section('보기', [
+        const Text('글자체', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final e in fontChoices.entries)
+            ChoiceChip(
+              label: Text(e.value),
+              selected: s.font == e.key,
+              onSelected: (_) => s.setFont(e.key),
+            ),
+        ]),
+        const SizedBox(height: 16),
+        const Text('글자 크기', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        SegmentedButton<double>(
+          segments: const [
+            ButtonSegment(value: 0.9, label: Text('작게')),
+            ButtonSegment(value: 1.0, label: Text('보통')),
+            ButtonSegment(value: 1.15, label: Text('크게')),
+          ],
+          selected: {s.textScale},
+          onSelectionChanged: (v) => s.setTextScale(v.first),
+        ),
+      ]),
+      _Section('보안', [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('앱 잠금 (PIN 6자리)'),
+          value: s.lock.enabled,
+          onChanged: (on) async {
+            if (on) {
+              final pin = await askNewPin(context);
+              if (pin != null) await s.setPin(pin);
+            } else {
+              await s.disableLock();
+            }
+          },
+        ),
+        if (s.lock.enabled) ...[
+          FutureBuilder<bool>(
+            future: biometricAvailable(),
+            builder: (c, snap) => SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('지문/얼굴로 잠금 해제'),
+              subtitle: snap.data == false
+                  ? const Text('이 기기에 등록된 생체 정보가 없어요')
+                  : null,
+              value: s.lock.biometric,
+              onChanged: snap.data == true ? s.setBiometric : null,
+            ),
+          ),
+          Row(children: [
+            const Expanded(child: Text('다시 잠기는 시간')),
+            DropdownButton<int>(
+              value: s.lock.delaySec,
+              underline: const SizedBox.shrink(),
+              items: const [
+                DropdownMenuItem(value: 0, child: Text('즉시')),
+                DropdownMenuItem(value: 60, child: Text('1분 후')),
+                DropdownMenuItem(value: 300, child: Text('5분 후')),
+              ],
+              onChanged: (v) => s.setLockDelay(v ?? 60),
+            ),
+          ]),
+        ],
+      ]),
+      _Section('정산', [
+        const Text('입금 받을 계좌 (요청 문구에 들어가요)',
+            style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: acct,
+          decoration: const InputDecoration(hintText: '예: 카카오뱅크 3333-00-0000000 홍길동'),
+          onSubmitted: s.setPayAccount,
+          onTapOutside: (_) => s.setPayAccount(acct.text),
+        ),
+        const SizedBox(height: 16),
+        const Text('내 이름 (이체 판정용)', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Text('쉼표로 여러 개 입력할 수 있어요. 홍*동처럼 가려진 이름도 같이 인식해요.',
+            style: TextStyle(
+                fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: names,
+          decoration: const InputDecoration(hintText: '홍길동'),
+          onSubmitted: s.setMyNames,
+          onTapOutside: (_) => s.setMyNames(names.text),
+        ),
+      ]),
+      _Section('알림 수집', [
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: RoundIcon(
+              s.listenerOn
+                  ? Icons.notifications_active_rounded
+                  : Icons.notifications_off_rounded,
+              s.listenerOn ? Dsn.mint : Dsn.coral,
+              size: 40),
+          title: Text(s.listenerOn ? '알림 수집 켜짐' : '알림 접근 꺼짐'),
+          subtitle: Text('저장된 알림 ${s.rawTotal}건'),
+          trailing: TextButton(
+              onPressed: s.openListenerSettings, child: const Text('권한 설정')),
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const RoundIcon(Icons.fact_check_rounded, Dsn.blue, size: 40),
+          title: const Text('확인이 필요한 내역 / 인식 못 한 알림'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => ReviewScreen(s))),
+        ),
+      ]),
+    ]);
+  }
+}

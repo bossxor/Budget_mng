@@ -1,0 +1,183 @@
+{
+  "_note": "received_at 연도는 2026 가정. type은 본인 이름(홍길동)/내 계좌 alias 등록 후 기준.",
+  "samples": [
+    {
+      "source": "kakaotalk:samsungcard",
+      "received_at": "2026-10-13T08:03:10",
+      "text": "삼성1234승인 홍*동\n1,500원 일시불\n10/13 08:03 커피브레이크\n누적1,200,000원",
+      "expect": {
+        "type": "expense",
+        "amount": 1500,
+        "merchant": "커피브레이크",
+        "occurred_at": "2026-10-13T08:03",
+        "card": "삼성1234",
+        "installment": "일시불",
+        "cumulative": 1200000
+      }
+    },
+    {
+      "source": "kakaotalk:samsungcard",
+      "received_at": "2026-10-11T01:18:05",
+      "text": "삼성1234승인 홍*동\n29,994원 일시불\n10/11 01:18 와디즈주식회사\n누적1,190,000원",
+      "expect": {
+        "type": "expense",
+        "amount": 29994,
+        "merchant": "와디즈주식회사",
+        "occurred_at": "2026-10-11T01:18",
+        "card": "삼성1234",
+        "installment": "일시불",
+        "cumulative": 1190000
+      }
+    },
+    {
+      "source": "kakaotalk:samsungcard",
+      "received_at": "2026-09-17T13:23:40",
+      "text": "삼성1234승인 홍*동\n37,500원 일시불\n09/17 13:23 한국철도공사_간\n누적450,000원",
+      "expect": {
+        "type": "expense",
+        "amount": 37500,
+        "merchant": "한국철도공사_간",
+        "category": "교통",
+        "occurred_at": "2026-09-17T13:23",
+        "cumulative": 450000
+      }
+    },
+    {
+      "source": "kakaobank",
+      "received_at": "2026-10-13T09:00:00",
+      "text": "입금 3원\n매일 용돈 받기 (이벤트) ->\n입출금통장(0001)\n잔액 999원",
+      "expect": {
+        "type": "income",
+        "amount": 3,
+        "counterparty": "매일 용돈 받기 (이벤트)",
+        "account": "입출금통장(0001)",
+        "balance": 999
+      }
+    },
+    {
+      "source": "kakaobank",
+      "received_at": "2026-10-12T09:00:00",
+      "text": "입금 1원\n매일 용돈 받기 (이벤트) ->\n입출금통장(0001)\n잔액 1082원",
+      "expect": {
+        "type": "income",
+        "amount": 1,
+        "counterparty": "매일 용돈 받기 (이벤트)",
+        "account": "입출금통장(0001)",
+        "balance": 1082
+      }
+    },
+    {
+      "source": "kakaobank",
+      "received_at": "2026-10-10T09:00:00",
+      "text": "출금 66,000원\n입출금통장(0001)  ->\n26주적금(0002) \n잔액 162원",
+      "expect": {
+        "type": "transfer",
+        "amount": 66000,
+        "account": "입출금통장(0001)",
+        "counterparty": "26주적금(0002)",
+        "balance": 162
+      }
+    },
+    {
+      "source": "sms:busanbank",
+      "received_at": "2026-10-12T14:53:00",
+      "text": "입금\n10/12 14:53 1\n계좌 123456789***0\n내용 당근143\n잔액 500,000",
+      "expect": {
+        "type": "income",
+        "amount": 1,
+        "counterparty": "당근143",
+        "occurred_at": "2026-10-12T14:53",
+        "balance": 500000
+      }
+    },
+    {
+      "source": "sms:busanbank",
+      "received_at": "2026-10-12T16:17:00",
+      "text": "출금\n10/12 16:17 24,000\n계좌 123456789***0\n내용\n메모 토스　김민수\n잔액 476,000",
+      "expect": {
+        "type": "expense",
+        "amount": 24000,
+        "counterparty": "김민수",
+        "via": "토스",
+        "occurred_at": "2026-10-12T16:17",
+        "balance": 476000
+      }
+    },
+    {
+      "source": "sms:busanbank",
+      "received_at": "2026-09-15T11:50:00",
+      "text": "입금\n09/15 11:50 200,000\n계좌 123456789***0\n내용 홍길동\n잔액 700,000",
+      "expect": {
+        "type": "transfer",
+        "amount": 200000,
+        "counterparty": "홍길동",
+        "occurred_at": "2026-09-15T11:50",
+        "balance": 700000
+      }
+    },
+    {
+      "source": "kakaotalk:samsungcard",
+      "received_at": "2026-10-09T19:41:30",
+      "text": "삼성1234취소 홍*동\n-4,020원 일시불\n10/09 19:41 쿠팡\n누적1,100,000원",
+      "expect": {
+        "type": "expense",
+        "amount": -4020,
+        "kind": "cancel",
+        "merchant": "쿠팡",
+        "category": "쇼핑",
+        "occurred_at": "2026-10-09T19:41",
+        "cumulative": 1100000
+      }
+    },
+    {
+      "source": "kakaotalk:samsungcard",
+      "received_at": "2026-10-07T19:55:20",
+      "text": "삼성1234승인 홍*동\n240,000원 06개월\n10/07 19:55 주식회사에스씨에\n누적1,250,000원",
+      "expect": {
+        "type": "expense",
+        "amount": 240000,
+        "installment": "06개월",
+        "installment_months": 6,
+        "merchant": "주식회사에스씨에",
+        "occurred_at": "2026-10-07T19:55",
+        "cumulative": 1250000
+      }
+    },
+    {
+      "source": "toss",
+      "received_at": "2026-10-05T03:51:10",
+      "text": "[출금 안내]\n동창 모임 모임통장에서\n74,540원이 출금됐어요.\n10/05 03:51\n박서연\n거래한 모임원 : 박*연",
+      "expect": {
+        "type": "group",
+        "amount": 74540,
+        "account": "동창 모임 모임통장",
+        "counterparty": "박서연",
+        "actor": "박*연",
+        "occurred_at": "2026-10-05T03:51"
+      }
+    },
+    {
+      "source": "toss",
+      "received_at": "2026-10-04T12:00:00",
+      "text": "82원 입금\n홍길동 -> 내 토스뱅크 통장",
+      "expect": {
+        "type": "transfer",
+        "amount": 82,
+        "counterparty": "홍길동",
+        "account": "내 토스뱅크 통장"
+      }
+    },
+    {
+      "source": "kakaobank",
+      "received_at": "2026-10-13T11:48:45",
+      "text": "입금 82원\n홍길동 → 입출금통장(0001)\r\n잔액 282원",
+      "expect": {
+        "type": "transfer",
+        "amount": 82,
+        "counterparty": "홍길동",
+        "account": "입출금통장(0001)",
+        "balance": 282
+      }
+    }
+  ]
+}
