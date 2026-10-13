@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../data/repo.dart';
 import '../lock.dart';
 import 'accounts_screen.dart';
+import 'extras_screens.dart';
 import 'settlement_screens.dart';
 import 'theme.dart';
 
@@ -321,6 +322,61 @@ class HomeScreen extends StatelessWidget {
                   .push(MaterialPageRoute(builder: (_) => ReviewScreen(s))),
             ),
           ),
+        for (final g in s.gaps.take(2))
+          Card(
+            color: const Color(0xFFFFF4DB),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+              child: Row(children: [
+                const Icon(Icons.search_off_rounded, color: Color(0xFFB27300)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('알림이 빠진 것 같아요',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, color: Color(0xFF6B4A00))),
+                    Text(
+                        '${s.accounts.where((a) => a.key == g.account).map((a) => a.label).firstOrNull ?? g.account} 잔액이 ${fmt(g.amount)}원 ${g.amount > 0 ? '더 많아요' : '더 적어요'}',
+                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B4A00))),
+                  ]),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await s.repo.resolveGap(g.id);
+                    await s.refresh();
+                  },
+                  child: const Text('무시'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 38),
+                      backgroundColor: const Color(0xFFB27300)),
+                  onPressed: () async {
+                    await showManualEntry(context, s,
+                        initialType: g.amount > 0 ? 'income' : 'expense',
+                        initialAmount: g.amount.abs(),
+                        initialTitle: '빠진 내역');
+                    await s.repo.resolveGap(g.id);
+                    await s.refresh();
+                  },
+                  child: const Text('추가'),
+                ),
+              ]),
+            ),
+          ),
+        if (s.backupDue)
+          Card(
+            child: ListTile(
+              leading: const RoundIcon(Icons.cloud_upload_rounded, Dsn.blue, size: 40),
+              title: const Text('백업해 두면 안심이에요',
+                  style: TextStyle(fontWeight: FontWeight.w700)),
+              subtitle: Text(s.lastBackupAt == null
+                  ? '아직 백업한 적이 없어요'
+                  : '마지막 백업 ${DateTime.now().difference(s.lastBackupAt!).inDays}일 전'),
+              trailing: FilledButton.tonal(
+                  onPressed: () => exportBackup(context, s), child: const Text('백업')),
+            ),
+          ),
         for (final g in s.suggestions.take(3))
           Card(
             color: const Color(0xFFE6F8EF),
@@ -352,6 +408,16 @@ class HomeScreen extends StatelessWidget {
               ]),
             ),
           ),
+        Card(
+          child: ListTile(
+            leading: const RoundIcon(Icons.insights_rounded, Dsn.blueDeep, size: 40),
+            title: const Text('월말 결산 보기', style: TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: const Text('지난달과 비교하고 많이 쓴 곳을 확인해요'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => ReportScreen(s))),
+          ),
+        ),
         if (recent.isNotEmpty)
           Card(
             child: Padding(
@@ -463,7 +529,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
         label: const Text('직접 입력'),
       ),
       body: Column(children: [
-        MonthBar(s),
+        Row(children: [
+          const SizedBox(width: 48),
+          Expanded(child: MonthBar(s)),
+          IconButton(
+            tooltip: '검색',
+            icon: const Icon(Icons.search_rounded),
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => SearchScreen(s))),
+          ),
+        ]),
         if (bankAccts.length > 1)
           SizedBox(
             height: 44,
@@ -586,6 +661,19 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
                     if (ctx.mounted) Navigator.pop(ctx);
                   },
                   child: const Text('확인 완료')),
+            OutlinedButton(
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await showTagSheet(context, s, t);
+                },
+                child: const Text('태그')),
+            if (t.type == 'expense' && t.amount > 0)
+              OutlinedButton(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await showSplitSheet(context, s, t);
+                  },
+                  child: const Text('카테고리 나누기')),
             if (t.type != 'transfer')
               OutlinedButton(
                   onPressed: () async {
@@ -608,10 +696,11 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
   );
 }
 
-Future<void> showManualEntry(BuildContext context, AppState s) {
-  final amt = TextEditingController();
-  final title = TextEditingController();
-  var type = 'expense';
+Future<void> showManualEntry(BuildContext context, AppState s,
+    {String? initialType, int? initialAmount, String? initialTitle}) {
+  final amt = TextEditingController(text: initialAmount?.toString() ?? '');
+  final title = TextEditingController(text: initialTitle ?? '');
+  var type = initialType ?? 'expense';
   String? error;
   return showModalBottomSheet(
     context: context,
@@ -742,6 +831,22 @@ class _ReviewScreenState extends State<ReviewScreen> {
       );
 }
 
+String _sourceLabel(String pkg) => switch (pkg) {
+      'com.kakaobank.channel' => '카카오뱅크',
+      'viva.republica.toss' => '토스',
+      'com.kakao.talk' => '카카오톡 (삼성카드)',
+      'com.samsung.android.messaging' || 'com.google.android.apps.messaging' => '문자',
+      _ => pkg,
+    };
+
+String _ago(DateTime t) {
+  final d = DateTime.now().difference(t);
+  if (d.inMinutes < 1) return '방금';
+  if (d.inHours < 1) return '${d.inMinutes}분 전';
+  if (d.inDays < 1) return '${d.inHours}시간 전';
+  return '${d.inDays}일 전';
+}
+
 class _Section extends StatelessWidget {
   const _Section(this.title, this.children);
   final String title;
@@ -867,7 +972,50 @@ class SettingsScreen extends StatelessWidget {
           onTapOutside: (_) => s.setMyNames(names.text),
         ),
       ]),
+      _Section('데이터', [
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const RoundIcon(Icons.cloud_upload_rounded, Dsn.blue, size: 40),
+          title: const Text('백업 내보내기'),
+          subtitle: Text(s.lastBackupAt == null
+              ? '암호로 잠근 파일로 저장해요'
+              : '마지막 백업 ${s.lastBackupAt!.month}월 ${s.lastBackupAt!.day}일'),
+          onTap: () => exportBackup(context, s),
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const RoundIcon(Icons.cloud_download_rounded, Dsn.mint, size: 40),
+          title: const Text('백업 불러오기'),
+          subtitle: const Text('기존 내역과 합쳐져요'),
+          onTap: () => importBackup(context, s),
+        ),
+        const SizedBox(height: 8),
+        const Text('알림 원문 보관 기간', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, children: [
+          for (final e in const {30: '30일', 90: '90일', 180: '180일', 0: '무기한'}.entries)
+            ChoiceChip(
+              label: Text(e.value),
+              selected: s.rawKeepDays == e.key,
+              onSelected: (_) => s.setRawKeepDays(e.key),
+            ),
+        ]),
+      ]),
       _Section('알림 수집', [
+        for (final src in s.sources)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(children: [
+              Expanded(child: Text(_sourceLabel(src.package))),
+              Text(_ago(src.last),
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      color: DateTime.now().difference(src.last).inDays >= 7
+                          ? Dsn.coral
+                          : Theme.of(context).colorScheme.onSurfaceVariant)),
+            ]),
+          ),
+        if (s.sources.isNotEmpty) const SizedBox(height: 8),
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading: RoundIcon(

@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core/classify.dart';
 import '../core/parsers.dart';
+import 'extras.dart';
 import 'planning_repo.dart';
 import 'settlement_repo.dart';
 
@@ -41,6 +42,28 @@ class TxRow {
       );
 }
 
+class TxSplit {
+  TxSplit(this.category, this.amount, [this.memo]);
+  final String category;
+  final int amount;
+  final String? memo;
+}
+
+class GapAlert {
+  GapAlert(this.id, this.account, this.amount, this.at);
+  final String id;
+  final String account;
+  final int amount; // +면 알림에 없던 입금이, −면 알림에 없던 출금이 있었다
+  final DateTime at;
+}
+
+class SourceStatus {
+  SourceStatus(this.package, this.last, this.count);
+  final String package;
+  final DateTime last;
+  final int count;
+}
+
 class AccountRow {
   AccountRow(this.key, this.label, this.role, this.balance,
       {this.monthlyTarget, this.goalAmount, this.goalDate, this.paysFrom});
@@ -75,10 +98,15 @@ const roles = {
 class Repo {
   Repo._(this._db)
       : settlements = SettlementRepo(_db),
-        planning = PlanningRepo(_db);
+        planning = PlanningRepo(_db),
+        tags = TagRepo(_db);
   final Database _db;
   final SettlementRepo settlements;
   final PlanningRepo planning;
+  final TagRepo tags;
+
+  /// 백업/검색 같은 부가 기능이 쓰는 원본 DB.
+  Database get db => _db;
 
   static Future<Repo> open() async {
     final path = p.join(await getDatabasesPath(), 'budget.db');
@@ -128,6 +156,12 @@ class Repo {
     } catch (_) {}
     await d.execute('''CREATE TABLE IF NOT EXISTS allocation(
       id TEXT PRIMARY KEY, from_key TEXT, to_key TEXT, amount INTEGER, day INTEGER)''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS gap_alert(
+      id TEXT PRIMARY KEY, account TEXT, amount INTEGER, at INTEGER, resolved INTEGER DEFAULT 0)''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS tx_tag(
+      tx_id TEXT, tag TEXT, PRIMARY KEY(tx_id, tag))''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS tx_split(
+      id TEXT PRIMARY KEY, tx_id TEXT, category TEXT, amount INTEGER, memo TEXT)''');
     await SettlementRepo.schema(d);
   }
 
@@ -172,6 +206,11 @@ class Repo {
     final learned = await learnedRules();
     var saved = 0;
     for (final r in raws) {
+      // 앱과 백그라운드 엔진이 동시에 돌아도 같은 알림을 두 번 처리하지 않게 먼저 선점한다.
+      final claimed = await _db.rawUpdate(
+          'UPDATE raw_notification SET state=3 WHERE id=? AND state=0',
+          [r['id']]);
+      if (claimed == 0) continue;
       final received = DateTime.fromMillisecondsSinceEpoch(r['posted_at'] as int);
       final parsed = parseNotification(
           joinNotification(r['title'] as String?, r['text'] as String), received);
@@ -211,6 +250,30 @@ class Repo {
       memo = '미분류';
     }
     final id = _newId();
+    final acctKey = t.account ?? t.card;
+    if (status == 'ok' &&
+        t.balance != null &&
+        acctKey != null &&
+        dir != null &&
+        t.type != 'group') {
+      // 직전 잔액에서 이번 금액을 더하고 뺀 값이 알림의 잔액과 다르면 그 사이 알림이 빠진 것이다.
+      final prev = await _db.rawQuery(
+          'SELECT balance FROM tx WHERE account=? AND balance IS NOT NULL AND deleted_at IS NULL AND occurred_at<=? ORDER BY occurred_at DESC LIMIT 1',
+          [acctKey, at]);
+      if (prev.isNotEmpty) {
+        final pb = prev.first['balance'] as int;
+        final expected = dir == 'in' ? pb + t.amount : pb - t.amount;
+        final gap = t.balance! - expected;
+        if (gap != 0) {
+          await _db.insert('gap_alert', {
+            'id': _newId(),
+            'account': acctKey,
+            'amount': gap,
+            'at': at,
+          });
+        }
+      }
+    }
     await _db.insert('tx', {
       'id': id,
       'type': t.type,
@@ -300,19 +363,113 @@ class Repo {
 
   Future<MonthSummary> summary(DateTime month) async {
     final rows = await monthTx(month);
+    final splits = await _splitsFor(rows.map((t) => t.id).toList());
     var exp = 0, inc = 0, review = 0;
     final cat = <String, int>{};
     for (final t in rows) {
       if (t.status == 'review') review++;
       if (t.type == 'expense') {
         exp += t.effective;
-        final c = t.category ?? '미분류';
-        cat[c] = (cat[c] ?? 0) + t.effective;
+        final sp = splits[t.id];
+        if (sp != null && sp.isNotEmpty && t.amount > 0) {
+          // 분할된 결제는 카테고리별로 나눠 센다 (정산 몫이 있으면 같은 비율로 축소).
+          var left = t.effective;
+          for (var i = 0; i < sp.length; i++) {
+            final part = i == sp.length - 1
+                ? left
+                : (sp[i].amount * t.effective / t.amount).round();
+            left -= part;
+            cat[sp[i].category] = (cat[sp[i].category] ?? 0) + part;
+          }
+        } else {
+          final c = t.category ?? '미분류';
+          cat[c] = (cat[c] ?? 0) + t.effective;
+        }
       } else if (t.type == 'income') {
         inc += t.effective;
       }
     }
     return MonthSummary(exp, inc, cat, review);
+  }
+
+  Future<Map<String, List<TxSplit>>> _splitsFor(List<String> ids) async {
+    if (ids.isEmpty) return {};
+    final out = <String, List<TxSplit>>{};
+    // SQLite 변수 개수 제한을 피하려고 나눠서 조회한다.
+    for (var i = 0; i < ids.length; i += 500) {
+      final chunk = ids.sublist(i, i + 500 > ids.length ? ids.length : i + 500);
+      final r = await _db.query('tx_split',
+          where: 'tx_id IN (${List.filled(chunk.length, '?').join(',')})',
+          whereArgs: chunk,
+          orderBy: 'rowid');
+      for (final m in r) {
+        out.putIfAbsent(m['tx_id'] as String, () => []).add(TxSplit(
+            m['category'] as String, m['amount'] as int, m['memo'] as String?));
+      }
+    }
+    return out;
+  }
+
+  Future<List<TxSplit>> splitsOf(String txId) async =>
+      (await _splitsFor([txId]))[txId] ?? [];
+
+  /// 분할을 통째로 교체한다. 빈 목록이면 분할을 해제한다.
+  Future<void> saveSplits(String txId, List<TxSplit> parts) async {
+    await _db.delete('tx_split', where: 'tx_id=?', whereArgs: [txId]);
+    for (final p in parts) {
+      await _db.insert('tx_split', {
+        'id': _newId(),
+        'tx_id': txId,
+        'category': p.category,
+        'amount': p.amount,
+        'memo': p.memo,
+      });
+    }
+  }
+
+  // ---- 누락 감지 ----
+  Future<List<GapAlert>> gaps() async {
+    final r = await _db.query('gap_alert',
+        where: 'resolved=0', orderBy: 'at DESC');
+    return r
+        .map((m) => GapAlert(m['id'] as String, m['account'] as String,
+            m['amount'] as int, DateTime.fromMillisecondsSinceEpoch(m['at'] as int)))
+        .toList();
+  }
+
+  Future<void> resolveGap(String id) => _db.update('gap_alert', {'resolved': 1},
+      where: 'id=?', whereArgs: [id]);
+
+  // ---- 수집 상태 / 보관 ----
+  /// 인식에 실패한 알림 중 광고이거나 금융 키워드가 없는 것은 개인정보만 쌓이므로 지운다.
+  Future<int> purgeNoise() => _db.delete('raw_notification', where: '''state=2 AND (
+      text LIKE '%(광고)%' OR text LIKE '%수신거부%' OR text LIKE '%알림끄기%' OR
+      NOT (text LIKE '%입금%' OR text LIKE '%출금%' OR text LIKE '%승인%' OR
+           text LIKE '%취소%' OR text LIKE '%결제%' OR text LIKE '%이체%' OR
+           text LIKE '%송금%' OR text LIKE '%잔액%'))''');
+
+  /// 앱이 죽어서 처리 중으로 남은 알림을 다시 대기 상태로 돌린다 (앱 시작 시 한 번).
+  Future<void> recoverClaims() => _db
+      .rawUpdate('UPDATE raw_notification SET state=0 WHERE state=3');
+
+  /// 수집원(패키지)별 마지막 수신 시각과 건수.
+  Future<List<SourceStatus>> sourceStatus() async {
+    final r = await _db.rawQuery(
+        'SELECT package, MAX(posted_at) AS last, COUNT(*) AS n FROM raw_notification GROUP BY package ORDER BY last DESC');
+    return r
+        .map((m) => SourceStatus(m['package'] as String,
+            DateTime.fromMillisecondsSinceEpoch(m['last'] as int), m['n'] as int))
+        .toList();
+  }
+
+  /// 보관 기간이 지난 처리 완료 원문을 지운다. days<=0이면 무기한.
+  Future<int> purgeRaw(int days, {DateTime? now}) async {
+    if (days <= 0) return 0;
+    final cutoff = (now ?? DateTime.now())
+        .subtract(Duration(days: days))
+        .millisecondsSinceEpoch;
+    return _db.delete('raw_notification',
+        where: 'posted_at<? AND state IN (1,2)', whereArgs: [cutoff]);
   }
 
   Future<List<TxRow>> reviewList() async {

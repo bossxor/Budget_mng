@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'app_state.dart';
@@ -6,6 +7,22 @@ import 'data/repo.dart';
 import 'lock.dart';
 import 'ui/screens.dart';
 import 'ui/theme.dart';
+
+/// 알림 서비스가 화면 없이 호출하는 진입점: 쌓인 알림을 거래로 바꾸고 끝났다고 알린다.
+@pragma('vm:entry-point')
+Future<void> backgroundMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    final repo = await Repo.open();
+    await repo.processPending();
+  } catch (_) {
+    // 실패해도 원문은 남아 있어 앱을 열 때 다시 처리된다.
+  } finally {
+    try {
+      await const MethodChannel('jumeoni/bg').invokeMethod('done');
+    } catch (_) {}
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

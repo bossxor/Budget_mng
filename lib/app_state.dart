@@ -33,10 +33,18 @@ class AppState extends ChangeNotifier {
   List<LinkSuggestion> suggestions = [];
   SavingsSummary savings = SavingsSummary(0, 0);
   List<PlanStatus> plans = [];
+  List<GapAlert> gaps = [];
+  List<SourceStatus> sources = [];
+  DateTime? lastBackupAt;
+  int rawKeepDays = 90;
   String payAccount = '';
   final lock = AppLock();
 
   Future<void> load() async {
+    await repo.recoverClaims();
+    await repo.purgeNoise();
+    final keep = int.tryParse(await repo.getKv('raw_keep_days') ?? '') ?? 90;
+    await repo.purgeRaw(keep);
     font = (await repo.getKv('font')) ?? 'noto';
     textScale = double.tryParse(await repo.getKv('text_scale') ?? '') ?? 1.0;
     myNames = (await repo.getKv('my_names')) ?? '';
@@ -57,6 +65,11 @@ class AppState extends ChangeNotifier {
     suggestions = await repo.settlements.suggestions();
     savings = await repo.planning.savings(month);
     plans = await repo.planning.status(month);
+    gaps = await repo.gaps();
+    sources = await repo.sourceStatus();
+    final lb = int.tryParse(await repo.getKv('last_backup_at') ?? '');
+    lastBackupAt = lb == null ? null : DateTime.fromMillisecondsSinceEpoch(lb);
+    rawKeepDays = int.tryParse(await repo.getKv('raw_keep_days') ?? '') ?? 90;
     try {
       listenerOn = await _channel.invokeMethod<bool>('isListenerEnabled') ?? false;
     } catch (_) {
@@ -153,6 +166,26 @@ class AppState extends ChangeNotifier {
       lock.locked = true;
       notifyListeners();
     }
+  }
+
+  /// 백업한 지 14일이 넘었고 기록이 있으면 홈에서 알려 준다.
+  bool get backupDue {
+    if (rows.isEmpty && accounts.isEmpty) return false;
+    final lb = lastBackupAt;
+    return lb == null || DateTime.now().difference(lb).inDays >= 14;
+  }
+
+  Future<void> markBackupDone() async {
+    lastBackupAt = DateTime.now();
+    await repo.setKv('last_backup_at', '${lastBackupAt!.millisecondsSinceEpoch}');
+    notifyListeners();
+  }
+
+  Future<void> setRawKeepDays(int d) async {
+    rawKeepDays = d;
+    await repo.setKv('raw_keep_days', '$d');
+    await repo.purgeRaw(d);
+    notifyListeners();
   }
 
   Future<void> setPayAccount(String v) async {
