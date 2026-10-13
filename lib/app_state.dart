@@ -14,6 +14,15 @@ const fontChoices = {
   'serif': 'Noto Serif KR',
 };
 
+/// 글자체 키 -> Google Fonts 이름.
+const fontGoogleNames = {
+  'noto': 'Noto Sans KR',
+  'nanum': 'Nanum Gothic',
+  'gowun': 'Gowun Dodum',
+  'plex': 'IBM Plex Sans KR',
+  'serif': 'Noto Serif KR',
+};
+
 const _channel = MethodChannel('jumeoni/native');
 
 class AppState extends ChangeNotifier {

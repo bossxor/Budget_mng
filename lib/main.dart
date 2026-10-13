@@ -31,17 +31,9 @@ Future<void> main() async {
   runApp(BudgetApp(state));
 }
 
-const _googleName = {
-  'noto': 'Noto Sans KR',
-  'nanum': 'Nanum Gothic',
-  'gowun': 'Gowun Dodum',
-  'plex': 'IBM Plex Sans KR',
-  'serif': 'Noto Serif KR',
-};
-
 /// 선택한 폰트를 Material 텍스트 스타일 전체에 적용한다.
 TextTheme _fontTheme(String key, TextTheme t) {
-  final name = _googleName[key] ?? 'Noto Sans KR';
+  final name = fontGoogleNames[key] ?? 'Noto Sans KR';
   TextStyle? f(TextStyle? s) =>
       s == null ? null : GoogleFonts.getFont(name, textStyle: s);
   return TextTheme(
