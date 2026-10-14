@@ -213,6 +213,7 @@ class Repo {
     if (raws.isEmpty) return 0;
     final me = await identity();
     final learned = await learnedRules();
+    final extra = ((await getKv('extra_packages')) ?? '').split(',');
     var saved = 0;
     for (final r in raws) {
       // 앱과 백그라운드 엔진이 동시에 돌아도 같은 알림을 두 번 처리하지 않게 먼저 선점한다.
@@ -221,8 +222,24 @@ class Repo {
           [r['id']]);
       if (claimed == 0) continue;
       final received = DateTime.fromMillisecondsSinceEpoch(r['posted_at'] as int);
-      final parsed = parseNotification(
-          joinNotification(r['title'] as String?, r['text'] as String), received);
+      final raw = joinNotification(r['title'] as String?, r['text'] as String);
+      var parsed = parseNotification(raw, received);
+      // 직접 추가한 앱은 템플릿이 없으므로 금액/방향만 짐작해 저장한다 (검토 목록에서 고칠 수 있다).
+      // ponytail: 취소/환불은 방향을 알 수 없어 "인식 못 한 알림"으로 남긴다.
+      if (parsed == null &&
+          extra.contains(r['package']) &&
+          !raw.contains(RegExp('취소|환불'))) {
+        final g = guessFromText(raw);
+        if (g.amount != null && g.amount! > 0) {
+          parsed = ParsedTx(
+              source: r['package'] as String,
+              type: g.type,
+              amount: g.amount!,
+              occurredAt: received,
+              merchant: g.type == 'expense' ? g.title : null,
+              counterparty: g.type == 'income' ? g.title : null);
+        }
+      }
       if (parsed == null) {
         await _db.update('raw_notification', {'state': 2},
             where: 'id=?', whereArgs: [r['id']]);
