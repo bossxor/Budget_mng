@@ -123,7 +123,28 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       listenerOn = false;
     }
+    await repo.writeWidgetSnapshot();
+    await updateWidgets();
     notifyListeners();
+  }
+
+  Future<void> updateWidgets() async {
+    try { await _channel.invokeMethod('updateWidgets'); } catch (_) {}
+  }
+
+  Future<bool> pinWidget() async {
+    try { return await _channel.invokeMethod<bool>('pinWidget') ?? false; }
+    catch (_) { return false; }
+  }
+
+  BudgetForecast? get budgetForecast {
+    final total = budgetLines.where((b) => b.category == null).firstOrNull;
+    if (total == null) return null;
+    final now = DateTime.now();
+    final spent = rows.where((t) => t.type == 'expense' && !t.occurredAt.isAfter(now))
+        .fold<int>(0, (sum, t) => sum + t.effective);
+    return BudgetForecast.calculate(month: month, now: now,
+        limit: total.limit, spent: spent);
   }
 
   Future<void> openListenerSettings() async {
@@ -168,6 +189,7 @@ class AppState extends ChangeNotifier {
     await repo.setKv('lock_hash', lock.hash!);
     await repo.setKv('lock_salt', lock.salt!);
     await applySecureFlag(true);
+    await updateWidgets();
     notifyListeners();
   }
 
@@ -181,6 +203,7 @@ class AppState extends ChangeNotifier {
     await repo.setKv('lock_hash', '');
     await repo.setKv('lock_bio', '0');
     await applySecureFlag(false);
+    await updateWidgets();
     // kv에 빈 문자열이 남지 않게 정리: 빈 값은 해시 없음으로 취급.
     lock.hash = null;
     notifyListeners();

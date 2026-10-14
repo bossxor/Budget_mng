@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
@@ -485,7 +486,25 @@ class Repo {
     await setKv('bg_last_saved', '$n');
     final total = int.tryParse(await getKv('bg_total_saved') ?? '') ?? 0;
     await setKv('bg_total_saved', '${total + n}');
+    await writeWidgetSnapshot(now: now);
     return n;
+  }
+
+  /// 위젯도 정산의 내 몫과 환불을 반영한 동일한 가계부 집계를 사용한다.
+  Future<void> writeWidgetSnapshot({DateTime? now}) async {
+    final date = now ?? DateTime.now();
+    final rows = (await monthTx(date))
+        .where((t) => !t.occurredAt.isAfter(date)).toList();
+    final spent = rows.where((t) => t.type == 'expense')
+        .fold<int>(0, (sum, t) => sum + t.effective);
+    final limit = (await budget.budgets())[''];
+    final forecast = BudgetForecast.calculate(
+        month: date, now: date, limit: limit ?? 0, spent: spent);
+    await setKv('widget_snapshot', jsonEncode({
+      'year': date.year, 'month': date.month, 'spent': spent,
+      'limit': limit, 'excess': forecast?.excess ?? 0,
+      'updatedAt': date.millisecondsSinceEpoch,
+    }));
   }
 
   /// 앱이 죽어서 처리 중으로 남은 알림을 다시 대기 상태로 돌린다 (앱 시작 시 한 번).

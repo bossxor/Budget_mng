@@ -26,9 +26,10 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val a = actionOf(intent) ?: return
+        pendingAction = a
         // 이미 떠 있는 앱이면 바로 알리고, 아직 화면이 준비 전이면 보관한다.
         val ch = channel
-        if (ch != null) ch.invokeMethod("launchAction", a) else pendingAction = a
+        if (ch != null) ch.invokeMethod("launchAction", a)
     }
 
     private fun actionOf(i: Intent?): String? =
@@ -62,6 +63,11 @@ class MainActivity : FlutterFragmentActivity() {
                         .sortedBy { it["name"] }
                     result.success(apps)
                 }
+                "updateWidgets" -> {
+                    BudgetWidget.updateAll(this)
+                    result.success(null)
+                }
+                "pinWidget" -> result.success(BudgetWidget.pin(this))
                 "takeLaunchAction" -> {
                     result.success(pendingAction)
                     pendingAction = null

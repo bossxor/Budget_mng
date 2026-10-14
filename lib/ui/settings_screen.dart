@@ -319,6 +319,14 @@ class SettingsScreen extends StatelessWidget {
         ),
       ),
       _Group('화면', [
+        _Row(icon: Icons.widgets_outlined, color: Dsn.blue,
+          title: '홈 화면 위젯 추가', value: '이번 달 지출 · 남은 예산 · 직접 입력',
+          onTap: () async {
+            final accepted = await s.pinWidget();
+            if (!context.mounted || accepted) return;
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('홈 화면을 길게 눌러 위젯 목록에서 주머니를 선택하세요.')));
+          }),
         _Row(
           icon: Icons.font_download_rounded,
           color: Dsn.blue,

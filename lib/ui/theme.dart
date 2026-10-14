@@ -14,13 +14,13 @@ TextStyle fontStyle(String key, [TextStyle? base]) {
 
 /// 주머니 디자인 토큰. 따뜻한 배경 + 둥근 카드 + 파스텔 카테고리 색.
 class Dsn {
-  static const blue = Color(0xFF4F7CFF);
-  static const blueDeep = Color(0xFF3A5FE0);
+  static const blue = Color(0xFF3568E8);
+  static const blueDeep = Color(0xFF244BB8);
   static const coral = Color(0xFFFF6B6B); // 지출
   static const mint = Color(0xFF1FB57A); // 입금
   static const amber = Color(0xFFFFB020); // 확인 필요
 
-  static const lightBg = Color(0xFFF5F7FF);
+  static const lightBg = Color(0xFFF5F6FA);
   static const darkBg = Color(0xFF101423);
 
   static const _cat = {
@@ -80,13 +80,13 @@ class Dsn {
         elevation: 0,
         margin: const EdgeInsets.only(bottom: 12),
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: scheme.surface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        height: 68,
+        height: 72,
         indicatorColor: blue.withValues(alpha: dark ? 0.28 : 0.14),
       ),
       chipTheme: ChipThemeData(
@@ -97,7 +97,7 @@ class Dsn {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: dark ? const Color(0xFF252C47) : const Color(0xFFEFF2FF),
+        fillColor: dark ? const Color(0xFF252C47) : const Color(0xFFF0F2F7),
         border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
       ),

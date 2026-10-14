@@ -118,8 +118,8 @@ class TxTile extends StatelessWidget {
                     decoration: BoxDecoration(
                         color: Dsn.amber.withValues(alpha: 0.18),
                         borderRadius: BorderRadius.circular(10)),
-                    child: Text(t.memo ?? '확인 필요',
-                        style: const TextStyle(
+                    child: const Text('확인 필요',
+                        style: TextStyle(
                             fontSize: 11,
                             color: Color(0xFFB27300),
                             fontWeight: FontWeight.w600)),
@@ -152,14 +152,18 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> {
   int _i = 0;
+  String? _pendingAction;
   static const _native = MethodChannel('jumeoni/native');
 
   @override
   void initState() {
     super.initState();
+    widget.s.addListener(_resumeAction);
     // 앱이 떠 있을 때 바로가기로 다시 들어온 경우.
     _native.setMethodCallHandler((call) async {
-      if (call.method == 'launchAction') _run(call.arguments as String?);
+      if (call.method == 'launchAction') {
+        _run(await _native.invokeMethod<String>('takeLaunchAction'));
+      }
     });
     // 바로가기로 앱이 새로 켜진 경우.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -171,8 +175,26 @@ class _ShellState extends State<Shell> {
 
   void _run(String? action) {
     if (action != 'quick_add' || !mounted) return;
+    if (widget.s.lock.locked) {
+      _pendingAction = action;
+      return;
+    }
     setState(() => _i = 1); // 내역 탭에서 입력 시트를 연다
     showManualEntry(context, widget.s);
+  }
+
+  void _resumeAction() {
+    if (_pendingAction == null || widget.s.lock.locked) return;
+    final action = _pendingAction;
+    _pendingAction = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run(action));
+  }
+
+  @override
+  void dispose() {
+    widget.s.removeListener(_resumeAction);
+    _native.setMethodCallHandler(null);
+    super.dispose();
   }
   @override
   Widget build(BuildContext context) {
@@ -228,8 +250,9 @@ class MonthBar extends StatelessWidget {
             IconButton(
                 onPressed: () => s.shiftMonth(-1),
                 icon: const Icon(Icons.chevron_left_rounded)),
-            Text('${s.month.year}년 ${s.month.month}월',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            Expanded(child: Text('${s.month.year}년 ${s.month.month}월',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700))),
             IconButton(
                 onPressed: () => s.shiftMonth(1),
                 icon: const Icon(Icons.chevron_right_rounded)),
@@ -244,20 +267,20 @@ class _MiniStat extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Expanded(
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.16),
+              color: Colors.transparent,
               borderRadius: BorderRadius.circular(18)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label,
                 style: TextStyle(
-                    fontSize: 12, color: Colors.white.withValues(alpha: 0.85))),
+                    fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
             const SizedBox(height: 2),
             FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(value,
                   style: TextStyle(
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.onSurface,
                       fontWeight: FontWeight.w700,
                       fontSize: 17,
                       fontFeatures: const [FontFeature.tabularFigures()])),
@@ -276,7 +299,8 @@ class _BudgetCard extends StatelessWidget {
     final total = s.budgetLines.where((b) => b.category == null).firstOrNull;
     final cats = s.budgetLines.where((b) => b.category != null).toList();
     final days = s.daysLeftThisMonth;
-    Color barColor(double r) => r >= 1 ? Dsn.coral : (r >= 0.8 ? Dsn.amber : Dsn.mint);
+    final forecast = s.budgetForecast;
+    Color barColor(double r) => r >= 1 ? Dsn.coral : (r >= 0.8 ? Dsn.amber : Dsn.blue);
     Widget bar(BudgetLine b, {double h = 8}) => ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: LinearProgressIndicator(
@@ -290,17 +314,17 @@ class _BudgetCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('이번 달 예산',
+          const Text('선택한 달 예산',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           if (total != null) ...[
             const SizedBox(height: 10),
             Row(children: [
-              Text(total.left >= 0 ? '${fmt(total.left)}원 남았어요' : '${fmt(total.left)}원 넘었어요',
+              Expanded(child: Text(total.left >= 0 ? '${fmt(total.left)}원 남았어요' : '${fmt(total.left)}원 넘었어요',
                   style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
-                      color: total.left >= 0 ? cs.onSurface : Dsn.coral)),
-              const Spacer(),
+                      color: total.left >= 0 ? cs.onSurface : Dsn.coral))),
+              const SizedBox(width: 12),
               Text('${(total.ratio * 100).round()}% 사용',
                   style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
             ]),
@@ -312,6 +336,28 @@ class _BudgetCard extends StatelessWidget {
                 child: Text('오늘부터 하루 ${fmt(total.left ~/ days)}원씩 쓸 수 있어요',
                     style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
               ),
+          ],
+          if (forecast != null && forecast.excess > 0) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: Dsn.coral.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12)),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.trending_up_rounded, color: Dsn.coral, size: 20),
+                const SizedBox(width: 8),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(total != null && total.left < 0 ? '이미 예산을 초과했어요' : '이 속도라면 예산을 넘을 수 있어요',
+                      style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  Text('월말 예상 ${fmt(forecast.projected)}원 · 예산보다 ${fmt(forecast.excess)}원 초과',
+                      style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text('현재까지의 하루 평균 기준이며 실제 지출과 달라질 수 있어요.',
+                      style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11)),
+                ])),
+              ]),
+            ),
           ],
           for (final b in cats)
             Padding(
@@ -392,7 +438,13 @@ class HomeScreen extends StatelessWidget {
     final recent = s.rows.where((t) => t.type != 'group').take(4).toList();
     return RefreshIndicator(
       onRefresh: s.refresh,
-      child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
+      child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.fromLTRB(20, 12, 20, 28), children: [
+        Padding(padding: const EdgeInsets.fromLTRB(4, 8, 4, 20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('주머니', style: TextStyle(color: cs.onSurface, fontSize: 24, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text('내 돈의 흐름을 한눈에', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+          ])),
         MonthBar(s),
         if (!s.listenerOn)
           Card(
@@ -410,38 +462,45 @@ class HomeScreen extends StatelessWidget {
                   child: const Text('켜기')),
             ),
           ),
-        // 히어로 카드
-        Container(
-          padding: const EdgeInsets.all(20),
-          margin: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            gradient: const LinearGradient(
-              colors: [Dsn.blue, Color(0xFF7A9BFF)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
+        // 여백 중심 요약: 금액을 먼저, 수입/차액을 나란히 배치.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 12, 4, 24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('이번 달 쓴 돈',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 14)),
-            const SizedBox(height: 4),
-            Text('${fmt(sm.expense)}원',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 36,
-                    fontWeight: FontWeight.w800,
-                    fontFeatures: [FontFeature.tabularFigures()])),
-            const SizedBox(height: 16),
+            Text('${s.month.month}월 쓴 돈', style: TextStyle(color: cs.onSurfaceVariant)),
+            const SizedBox(height: 6),
+            FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
+              child: Text('${fmt(sm.expense)}원', style: TextStyle(
+                color: cs.onSurface, fontSize: 38, fontWeight: FontWeight.w800,
+                fontFeatures: const [FontFeature.tabularFigures()]))),
+            const SizedBox(height: 20),
             Row(children: [
-              _MiniStat('들어온 돈', '+${fmt(sm.income)}'),
-              const SizedBox(width: 8),
-              _MiniStat('받을 돈', fmt(s.receivable)),
-              const SizedBox(width: 8),
-              _MiniStat('남은 돈', '${net < 0 ? '−' : ''}${fmt(net)}'),
+              _MiniStat('들어온 돈', '${fmt(sm.income)}원'),
+              const SizedBox(width: 20),
+              _MiniStat('수입 − 지출', '${net < 0 ? '−' : ''}${fmt(net)}원'),
             ]),
           ]),
         ),
+        Row(children: [
+          Expanded(child: OutlinedButton.icon(
+            onPressed: () => showManualEntry(context, s),
+            icon: const Icon(Icons.add_rounded), label: const Text('직접 입력'))),
+          const SizedBox(width: 12),
+          Expanded(child: OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => SettlementListScreen(s))),
+            icon: const Icon(Icons.groups_outlined), label: const Text('정산 관리'))),
+        ]),
+        const SizedBox(height: 16),
+        if (s.receivable > 0)
+          Card(child: ListTile(
+            leading: const RoundIcon(Icons.groups_rounded, Dsn.blue, size: 40),
+            title: Text('받을 돈 ${fmt(s.receivable)}원',
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: const Text('아직 끝나지 않은 정산을 확인해요'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => SettlementListScreen(s))),
+          )),
         if (sm.reviewCount > 0)
           Card(
             color: const Color(0xFFFFF4DB),
@@ -485,12 +544,14 @@ class HomeScreen extends StatelessWidget {
                       minimumSize: const Size(0, 38),
                       backgroundColor: const Color(0xFFB27300)),
                   onPressed: () async {
-                    await showManualEntry(context, s,
+                    final saved = await showManualEntry(context, s,
                         initialType: g.amount > 0 ? 'income' : 'expense',
                         initialAmount: g.amount.abs(),
                         initialTitle: '빠진 내역');
-                    await s.repo.resolveGap(g.id);
-                    await s.refresh();
+                    if (saved == true) {
+                      await s.repo.resolveGap(g.id);
+                      await s.refresh();
+                    }
                   },
                   child: const Text('추가'),
                 ),

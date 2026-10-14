@@ -33,6 +33,7 @@ object IngestRunner {
                 MethodChannel(e.dartExecutor.binaryMessenger, "jumeoni/bg")
                     .setMethodCallHandler { call, result ->
                         if (call.method == "done") {
+                            BudgetWidget.updateAll(app)
                             result.success(null)
                             finish(app, e)
                         } else {

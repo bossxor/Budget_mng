@@ -27,6 +27,22 @@ class BudgetLine {
   int get left => limit - spent;
 }
 
+/// 현재 월의 누적 지출을 경과 일수로 나눈 단순 추세 예상.
+class BudgetForecast {
+  BudgetForecast(this.limit, this.spent, this.projected);
+  final int limit, spent, projected;
+  int get excess => projected > limit ? projected - limit : 0;
+  static BudgetForecast? calculate({required DateTime month,
+      required DateTime now, required int limit, required int spent}) {
+    if (month.year != now.year || month.month != now.month ||
+        now.day < 3 || limit <= 0 || spent <= 0) {
+      return null;
+    }
+    final days = DateTime(now.year, now.month + 1, 0).day;
+    return BudgetForecast(limit, spent, (spent * days / now.day).round());
+  }
+}
+
 class BudgetRepo {
   BudgetRepo(this._db);
   final Database _db;
