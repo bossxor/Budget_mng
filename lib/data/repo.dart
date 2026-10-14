@@ -567,6 +567,13 @@ class Repo {
     return out;
   }
 
+  Future<void> addAccount(String name, {String role = 'unset'}) async {
+    final key = name.trim();
+    if (key.isEmpty) throw ArgumentError('통장 이름을 입력하세요');
+    if (!roles.containsKey(role)) throw ArgumentError('용도를 확인하세요');
+    await _db.insert('account', {'key': key, 'label': key, 'role': role},
+        conflictAlgorithm: ConflictAlgorithm.abort);
+  }
   Future<void> setAccount(String key, {String? label, String? role}) async {
     final v = <String, Object?>{};
     if (label != null) v['label'] = label;

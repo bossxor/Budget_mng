@@ -337,7 +337,7 @@ Future<void> showTagSheet(BuildContext context, AppState s, TxRow t) async {
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('태그', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
@@ -400,7 +400,7 @@ Future<void> showSplitSheet(BuildContext context, AppState s, TxRow t) async {
       builder: (ctx, setS) {
         final sum = rows.fold<int>(0, (a, r) => a + (int.tryParse(r.amt.text) ?? 0));
         return SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+          padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('${t.title} ${fmt(t.amount)}원 나누기',
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),

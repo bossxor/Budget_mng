@@ -975,8 +975,8 @@ Future<void> showTxForm(BuildContext context, AppState s, TxRow t) {
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setS) => Padding(
-        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+      builder: (ctx, setS) => SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           TextField(controller: title, decoration: const InputDecoration(labelText: '내용')),
           const SizedBox(height: 12),
@@ -1050,9 +1050,9 @@ Future<bool?> showManualEntry(BuildContext context, AppState s,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setS) => Padding(
+      builder: (ctx, setS) => SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(
-            20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+            20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           SegmentedButton<String>(
             segments: const [

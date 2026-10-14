@@ -75,4 +75,24 @@ void main() {
     await tester.scrollUntilVisible(find.text('선택한 달 예산'), 150);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('저장 버튼은 시스템 하단 바 위에 놓인다', (tester) async {
+    tester.view.physicalSize = const Size(390, 800);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = const FakeViewPadding(bottom: 34);
+    tester.view.viewPadding = const FakeViewPadding(bottom: 34);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: Builder(
+      builder: (context) => TextButton(onPressed: () => showManualEntry(context, state),
+        child: const Text('입력 열기'))))));
+    await tester.tap(find.text('입력 열기'));
+    await tester.pumpAndSettle();
+    expect(tester.getBottomRight(find.widgetWithText(FilledButton, '저장')).dy, lessThanOrEqualTo(766));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    tester.view.padding = FakeViewPadding.zero;
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('저장'));
+    await tester.pumpAndSettle();
+    expect(tester.getBottomRight(find.widgetWithText(FilledButton, '저장')).dy, lessThanOrEqualTo(500));
+    expect(tester.takeException(), isNull);
+  });
 }

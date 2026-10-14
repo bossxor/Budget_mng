@@ -85,11 +85,14 @@ class AccountsScreen extends StatelessWidget {
             ]),
           ),
         ),
+      Padding(padding: const EdgeInsets.only(bottom: 12),
+        child: FilledButton.icon(onPressed: () => _addAccount(context, s),
+          icon: const Icon(Icons.add_rounded), label: const Text('내 통장 추가'))),
       _PlanCard(s, labelOf),
       if (s.accounts.isEmpty)
         const Padding(
           padding: EdgeInsets.all(24),
-          child: Text('입출금 알림이 오면 통장이 자동으로 나타나요.\n이름과 용도를 정해 주머니를 나눠 보세요.',
+          child: Text('내 통장을 직접 추가하거나 입출금 알림으로 자동 등록할 수 있어요.\n이름과 용도를 정해 주머니를 나눠 보세요.',
               textAlign: TextAlign.center),
         ),
       for (final a in sorted) _AccountCard(s, a, labelOf),
@@ -272,8 +275,8 @@ void _addPlan(BuildContext context, AppState s, Map<String, String> labelOf) {
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setS) => Padding(
-        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+      builder: (ctx, setS) => SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('배분 계획 추가',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
@@ -287,7 +290,7 @@ void _addPlan(BuildContext context, AppState s, Map<String, String> labelOf) {
               for (final a in keys)
                 DropdownMenuItem(value: a.key, child: Text(a.label)),
             ],
-            onChanged: (v) => setS(() => from = v),
+            onChanged: (v) => setS(() { from = v; if (to == v) to = null; }),
           ),
           const SizedBox(height: 8),
           const Text('받는 통장'),
@@ -341,6 +344,8 @@ void _addPlan(BuildContext context, AppState s, Map<String, String> labelOf) {
                   setS(() => err = '보내는 통장을 고르세요');
                 } else if (dest == null) {
                   setS(() => err = '받는 통장을 고르거나 이름을 입력하세요');
+                } else if (dest == from) {
+                  setS(() => err = '서로 다른 통장을 선택하세요');
                 } else if (a == null || a <= 0) {
                   setS(() => err = '금액을 입력하세요');
                 } else if (d == null || d < 1 || d > 31) {
@@ -377,7 +382,7 @@ void _editAccount(BuildContext context, AppState s, AccountRow a,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setS) => SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(a.key, style: Theme.of(ctx).textTheme.bodySmall),
           const SizedBox(height: 8),
@@ -468,4 +473,48 @@ void _editAccount(BuildContext context, AppState s, AccountRow a,
       ),
     ),
   );
+}
+
+Future<void> _addAccount(BuildContext context, AppState s) async {
+  final name = TextEditingController();
+  var role = 'unset';
+  String? error;
+  var saving = false;
+  try {
+    await showModalBottomSheet<void>(context: context, useSafeArea: true,
+      isScrollControlled: true, showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20, 0, 20,
+            20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('내 통장 추가', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 16),
+          TextField(controller: name, autofocus: true, decoration: InputDecoration(
+            labelText: '통장 이름', hintText: '예: 카카오뱅크 생활비 통장', errorText: error)),
+          const SizedBox(height: 12),
+          const Text('알림에 표시되는 통장 이름과 같게 입력하면 잔액을 함께 확인할 수 있어요.'),
+          const SizedBox(height: 16),
+          Wrap(spacing: 8, children: [for (final e in roles.entries)
+            ChoiceChip(label: Text(e.value), selected: role == e.key,
+              onSelected: saving ? null : (_) => setS(() => role = e.key))]),
+          const SizedBox(height: 16),
+          SizedBox(width: double.infinity, child: FilledButton(
+            onPressed: saving ? null : () async {
+              final key = name.text.trim();
+              if (key.isEmpty || s.accounts.any((a) => a.key == key || a.label == key)) {
+                setS(() => error = key.isEmpty ? '통장 이름을 입력하세요' : '이미 등록된 통장이에요');
+                return;
+              }
+              setS(() => saving = true);
+              try {
+                await s.repo.addAccount(key, role: role);
+                await s.refresh();
+                if (ctx.mounted) Navigator.pop(ctx);
+              } catch (_) {
+                if (ctx.mounted) setS(() { saving = false; error = '저장하지 못했어요. 이름을 확인하고 다시 시도하세요.'; });
+              }
+            }, child: Text(saving ? '저장 중…' : '저장'))),
+        ]),
+      )));
+  } finally { name.dispose(); }
 }

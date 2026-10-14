@@ -184,7 +184,7 @@ Future<void> _editText(BuildContext context,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         if (help != null)
@@ -236,7 +236,7 @@ Future<void> _editCategoryBudgets(BuildContext context, AppState s) async {
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+      padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
       child: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('카테고리 예산',
