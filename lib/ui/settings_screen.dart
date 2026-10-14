@@ -180,6 +180,7 @@ Future<void> _editText(BuildContext context,
   final ctl = TextEditingController(text: initial);
   return showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => Padding(
@@ -231,6 +232,7 @@ Future<void> _editCategoryBudgets(BuildContext context, AppState s) async {
   };
   await showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => Padding(
@@ -462,6 +464,7 @@ class SettingsScreen extends StatelessWidget {
           value: '엑셀에서 바로 열 수 있어요',
           onTap: () => showModalBottomSheet(
             context: context,
+            useSafeArea: true,
             showDragHandle: true,
             builder: (ctx) => SafeArea(
               child: Column(mainAxisSize: MainAxisSize.min, children: [

@@ -789,6 +789,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
   return showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     showDragHandle: true,
     isScrollControlled: true,
     builder: (ctx) => SafeArea(
@@ -909,6 +910,7 @@ Future<void> showTxForm(BuildContext context, AppState s, TxRow t) {
   String? err;
   return showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(
@@ -983,6 +985,7 @@ Future<bool?> showManualEntry(BuildContext context, AppState s,
   String? error;
   return showModalBottomSheet<bool>(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(

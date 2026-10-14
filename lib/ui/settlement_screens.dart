@@ -529,6 +529,7 @@ class _SettlementDetailScreenState extends State<SettlementDetailScreen> {
     if (!mounted) return;
     await showModalBottomSheet(
       context: context,
+      useSafeArea: true,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (ctx) => DraggableScrollableSheet(

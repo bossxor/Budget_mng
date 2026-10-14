@@ -268,6 +268,7 @@ void _addPlan(BuildContext context, AppState s, Map<String, String> labelOf) {
   String? err;
   showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(
@@ -371,6 +372,7 @@ void _editAccount(BuildContext context, AppState s, AccountRow a,
   final bankKeys = s.accounts.where((x) => !_looksLikeCard(x.key)).toList();
   showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(

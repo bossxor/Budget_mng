@@ -333,6 +333,7 @@ Future<void> showTagSheet(BuildContext context, AppState s, TxRow t) async {
   final ctl = TextEditingController(text: current.join(', '));
   await showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => Padding(
@@ -392,6 +393,7 @@ Future<void> showSplitSheet(BuildContext context, AppState s, TxRow t) async {
   String? err;
   await showModalBottomSheet(
     context: context,
+    useSafeArea: true,
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) => StatefulBuilder(
