@@ -450,6 +450,10 @@ class Repo {
       where: 'id=?', whereArgs: [id]);
 
   // ---- 수집 상태 / 보관 ----
+  /// 인식 못 한 알림을 사용자가 직접 처리(수동 입력 또는 무시)했다고 표시한다.
+  Future<void> markRawHandled(int id) => _db.update(
+      'raw_notification', {'state': 4}, where: 'id=?', whereArgs: [id]);
+
   /// 인식에 실패한 알림 중 광고이거나 금융 키워드가 없는 것은 개인정보만 쌓이므로 지운다.
   Future<int> purgeNoise() => _db.delete('raw_notification', where: '''state=2 AND (
       text LIKE '%(광고)%' OR text LIKE '%수신거부%' OR text LIKE '%알림끄기%' OR
@@ -488,7 +492,7 @@ class Repo {
         .subtract(Duration(days: days))
         .millisecondsSinceEpoch;
     return _db.delete('raw_notification',
-        where: 'posted_at<? AND state IN (1,2)', whereArgs: [cutoff]);
+        where: 'posted_at<? AND state IN (1,2,4)', whereArgs: [cutoff]);
   }
 
   Future<List<TxRow>> reviewList() async {

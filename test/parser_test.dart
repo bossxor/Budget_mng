@@ -35,4 +35,16 @@ void main() {
         DateTime(2027, 1, 1, 0, 5))!;
     expect(tx.occurredAt.year, 2026);
   });
+
+  test('템플릿 없는 알림에서 금액·방향 짐작', () {
+    var g = guessFromText('[KB국민] 홍길동님 10/14 12:30\n출금 12,300원 스타벅스\n잔액 50,000원');
+    expect(g.amount, 12300);
+    expect(g.type, 'expense');
+    expect(g.title, '[KB국민] 홍길동님 10/14 12');
+    g = guessFromText('신한 입금 1,000,000 월급');
+    expect(g.amount, 1000000);
+    expect(g.type, 'income');
+    g = guessFromText('금액 정보 없음');
+    expect(g.amount, isNull);
+  });
 }

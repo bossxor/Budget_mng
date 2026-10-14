@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../data/budget_repo.dart';
+import '../core/parsers.dart';
 import '../data/repo.dart';
 import 'accounts_screen.dart';
 import 'extras_screens.dart';
@@ -974,13 +975,13 @@ Future<void> showTxForm(BuildContext context, AppState s, TxRow t) {
   );
 }
 
-Future<void> showManualEntry(BuildContext context, AppState s,
+Future<bool?> showManualEntry(BuildContext context, AppState s,
     {String? initialType, int? initialAmount, String? initialTitle}) {
   final amt = TextEditingController(text: initialAmount?.toString() ?? '');
   final title = TextEditingController(text: initialTitle ?? '');
   var type = initialType ?? 'expense';
   String? error;
-  return showModalBottomSheet(
+  return showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
@@ -1026,7 +1027,7 @@ Future<void> showManualEntry(BuildContext context, AppState s,
                     amount: v,
                     title: title.text.trim().isEmpty ? '현금' : title.text.trim());
                 await s.refresh();
-                if (ctx.mounted) Navigator.pop(ctx);
+                if (ctx.mounted) Navigator.pop(ctx, true);
               },
               child: const Text('저장'),
             ),
@@ -1093,6 +1094,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
                   child: Text('인식 못 한 알림',
                       style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(8, 0, 8, 8),
+                  child: Text('눌러서 내역으로 만들거나, X로 지울 수 있어요.',
+                      style: TextStyle(fontSize: 12.5)),
+                ),
                 for (final r in failed)
                   Card(
                     child: ListTile(
@@ -1100,6 +1106,27 @@ class _ReviewScreenState extends State<ReviewScreen> {
                           maxLines: 2, overflow: TextOverflow.ellipsis),
                       subtitle: Text(r['package'] as String,
                           style: const TextStyle(fontSize: 11)),
+                      trailing: IconButton(
+                        tooltip: '무시',
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () async {
+                          await widget.s.repo.markRawHandled(r['id'] as int);
+                          setState(_load);
+                        },
+                      ),
+                      onTap: () async {
+                        final g = guessFromText(joinNotification(
+                            r['title'] as String?, r['text'] as String));
+                        final saved = await showManualEntry(context, widget.s,
+                            initialType: g.type,
+                            initialAmount: g.amount,
+                            initialTitle: g.title);
+                        if (saved == true) {
+                          await widget.s.repo.markRawHandled(r['id'] as int);
+                          await widget.s.refresh();
+                        }
+                        setState(_load);
+                      },
                     ),
                   ),
               ],

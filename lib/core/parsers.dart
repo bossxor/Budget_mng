@@ -201,3 +201,16 @@ ParsedTx? parseNotification(String raw, DateTime received) {
 /// 알림의 제목과 본문을 한 덩어리로 합친다. 카카오뱅크처럼 '입금 82원'이 제목에 오는 경우가 있다.
 String joinNotification(String? title, String text) =>
     (title == null || title.trim().isEmpty) ? text : '${title.trim()}\n$text';
+
+/// 템플릿이 없는 알림에서 금액과 입출금 방향을 짐작한다 (수동 입력 기본값용).
+({int? amount, String type, String title}) guessFromText(String raw) {
+  final t = _normalize(raw);
+  final a = RegExp(r'([\d,]{1,15})\s*원').firstMatch(t) ??
+      RegExp(r'(?:입금|출금|승인|결제|이체|송금)\D{0,6}?([\d,]{1,15})').firstMatch(t);
+  final digits = a?.group(1)?.replaceAll(',', '');
+  final amount = (digits == null || digits.isEmpty) ? null : int.tryParse(digits);
+  final type = RegExp(r'입금|받았|들어왔').hasMatch(t) ? 'income' : 'expense';
+  final first = t.split('\n').firstWhere((l) => l.trim().isNotEmpty, orElse: () => '');
+  final title = first.length > 20 ? first.substring(0, 20) : first;
+  return (amount: amount, type: type, title: title);
+}
