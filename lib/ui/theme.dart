@@ -1,4 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+import '../app_state.dart';
+
+/// 글자체 키에 맞는 스타일. 번들 글자체는 바로, 나머지는 Google Fonts로.
+TextStyle fontStyle(String key, [TextStyle? base]) {
+  final bundled = bundledFonts[key];
+  if (bundled != null) {
+    return (base ?? const TextStyle()).copyWith(fontFamily: bundled);
+  }
+  return GoogleFonts.getFont(fontGoogleNames[key] ?? 'Noto Sans KR', textStyle: base);
+}
 
 /// 주머니 디자인 토큰. 따뜻한 배경 + 둥근 카드 + 파스텔 카테고리 색.
 class Dsn {

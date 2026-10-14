@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../app_state.dart';
 import '../data/settlement_repo.dart';
@@ -125,8 +124,7 @@ class _FontDropdown extends StatelessWidget {
               DropdownMenuItem(
                 value: e.key,
                 child: Text(e.value,
-                    style: GoogleFonts.getFont(fontGoogleNames[e.key] ?? 'Noto Sans KR',
-                        fontSize: 16)),
+                    style: fontStyle(e.key, const TextStyle(fontSize: 16))),
               ),
           ],
           onChanged: (v) {

@@ -8,6 +8,8 @@ import 'data/settlement_repo.dart';
 import 'lock.dart';
 
 const fontChoices = {
+  'pretendard': 'Pretendard',
+  'nanumsquare': '나눔스퀘어',
   'noto': 'Noto Sans KR',
   'nanum': '나눔고딕',
   'gowun': '고운돋움',
@@ -15,7 +17,10 @@ const fontChoices = {
   'serif': 'Noto Serif KR',
 };
 
-/// 글자체 키 -> Google Fonts 이름.
+/// 앱에 넣은 글자체 키 -> pubspec 의 family 이름 (인터넷 없이도 바로 보인다).
+const bundledFonts = {'pretendard': 'Pretendard', 'nanumsquare': 'NanumSquare'};
+
+/// 글자체 키 -> Google Fonts 이름 (처음 쓸 때 내려받는다).
 const fontGoogleNames = {
   'noto': 'Noto Sans KR',
   'nanum': 'Nanum Gothic',

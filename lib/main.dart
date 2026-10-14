@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'app_state.dart';
 import 'data/repo.dart';
@@ -33,9 +32,7 @@ Future<void> main() async {
 
 /// 선택한 폰트를 Material 텍스트 스타일 전체에 적용한다.
 TextTheme _fontTheme(String key, TextTheme t) {
-  final name = fontGoogleNames[key] ?? 'Noto Sans KR';
-  TextStyle? f(TextStyle? s) =>
-      s == null ? null : GoogleFonts.getFont(name, textStyle: s);
+  TextStyle? f(TextStyle? s) => s == null ? null : fontStyle(key, s);
   return TextTheme(
     displayLarge: f(t.displayLarge),
     displayMedium: f(t.displayMedium),

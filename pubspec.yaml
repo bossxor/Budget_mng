@@ -67,6 +67,25 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # 앱에 넣은 글자체 (SIL OFL 1.1, assets/fonts 의 라이선스 파일 참고)
+  fonts:
+    - family: Pretendard
+      fonts:
+        - asset: assets/fonts/Pretendard-Regular.otf
+        - asset: assets/fonts/Pretendard-SemiBold.otf
+          weight: 600
+        - asset: assets/fonts/Pretendard-Bold.otf
+          weight: 700
+        - asset: assets/fonts/Pretendard-ExtraBold.otf
+          weight: 800
+    - family: NanumSquare
+      fonts:
+        - asset: assets/fonts/NanumSquareR.ttf
+        - asset: assets/fonts/NanumSquareB.ttf
+          weight: 700
+        - asset: assets/fonts/NanumSquareEB.ttf
+          weight: 800
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
