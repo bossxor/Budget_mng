@@ -35,6 +35,16 @@ class NotifService : NotificationListenerService() {
     private val debuggable: Boolean
         get() = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
+    /** 설정에서 사용자가 직접 추가한 앱 (kv.extra_packages, 쉼표 구분). */
+    private fun extraPackages(): Set<String> = try {
+        SQLiteDatabase.openDatabase(getDatabasePath("budget.db").path, null, SQLiteDatabase.OPEN_READONLY).use {
+            it.rawQuery("SELECT v FROM kv WHERE k='extra_packages'", null).use { c ->
+                if (c.moveToFirst()) c.getString(0).split(",").map { s -> s.trim() }.filter { s -> s.isNotEmpty() }.toSet()
+                else emptySet()
+            }
+        }
+    } catch (_: Exception) { emptySet() }
+
     /** 문자 앱은 MessagingStyle이라 EXTRA_TEXT가 비는 경우가 있어 메시지 목록에서 읽는다. */
     private fun messagingText(extras: android.os.Bundle): String? {
         @Suppress("DEPRECATION")
@@ -57,6 +67,7 @@ class NotifService : NotificationListenerService() {
         val financial = FINANCE_WORDS.containsMatchIn(whole) && !AD_WORDS.containsMatchIn(whole)
         val allowed = when (pkg) {
             in BANK_APPS, in SMS_APPS -> financial
+            in extraPackages() -> financial
             KAKAO -> title in KAKAO_TITLES && !AD_WORDS.containsMatchIn(whole)
             SHELL -> debuggable
             else -> false

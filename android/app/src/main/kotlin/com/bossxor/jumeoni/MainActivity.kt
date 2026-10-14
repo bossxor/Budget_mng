@@ -52,6 +52,16 @@ class MainActivity : FlutterFragmentActivity() {
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     result.success(null)
                 }
+                "listApps" -> {
+                    // 런처에 보이는 앱만 (이름, 패키지). 직접 추가할 금융 앱을 고르는 용도.
+                    val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                    val apps = packageManager.queryIntentActivities(i, 0)
+                        .map { mapOf("name" to it.loadLabel(packageManager).toString(), "package" to it.activityInfo.packageName) }
+                        .filter { it["package"] != packageName }
+                        .distinctBy { it["package"] }
+                        .sortedBy { it["name"] }
+                    result.success(apps)
+                }
                 "takeLaunchAction" -> {
                     result.success(pendingAction)
                     pendingAction = null

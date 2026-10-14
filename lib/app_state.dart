@@ -266,6 +266,23 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 사용자가 직접 추가한 금융 앱 패키지 (알림 서비스가 같은 kv를 읽는다).
+  Future<List<String>> extraPackages() async =>
+      ((await repo.getKv('extra_packages')) ?? '')
+          .split(',')
+          .where((e) => e.trim().isNotEmpty)
+          .toList();
+
+  Future<void> setExtraPackages(List<String> v) async {
+    await repo.setKv('extra_packages', v.join(','));
+    notifyListeners();
+  }
+
+  Future<List<({String name, String package})>> installedApps() async {
+    final r = await _channel.invokeListMethod<Map>('listApps') ?? [];
+    return [for (final m in r) (name: m['name'] as String, package: m['package'] as String)];
+  }
+
   Future<void> setPayAccount(String v) async {
     payAccount = v;
     await repo.setKv('pay_account', v);

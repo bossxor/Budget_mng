@@ -545,6 +545,13 @@ class SettingsScreen extends StatelessWidget {
                 : null,
           ),
         _Row(
+          icon: Icons.add_alert_rounded,
+          color: Dsn.blue,
+          title: '다른 은행 앱 추가',
+          value: '목록에서 골라 입출금 알림을 같이 모아요',
+          onTap: () => _pickApps(context, s),
+        ),
+        _Row(
           icon: Icons.fact_check_rounded,
           color: Dsn.blue,
           title: '확인이 필요한 내역',
@@ -562,4 +569,54 @@ class SettingsScreen extends StatelessWidget {
       ),
     ]);
   }
+}
+
+/// 설치된 앱 중 알림을 모을 금융 앱을 고른다. 금융 키워드가 있는 알림만 저장된다.
+Future<void> _pickApps(BuildContext context, AppState s) async {
+  final apps = await s.installedApps();
+  final chosen = {...await s.extraPackages()};
+  if (!context.mounted) return;
+  await showModalBottomSheet<void>(
+    context: context,
+    useSafeArea: true,
+    isScrollControlled: true,
+    builder: (ctx) {
+      var q = '';
+      return StatefulBuilder(builder: (ctx, set) {
+        final shown = apps
+            .where((a) => chosen.contains(a.package) || a.name.contains(q))
+            .toList();
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.8,
+          builder: (_, sc) => Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: TextField(
+                decoration: const InputDecoration(
+                    hintText: '앱 이름 검색 (예: 국민, 신한)',
+                    prefixIcon: Icon(Icons.search_rounded)),
+                onChanged: (v) => set(() => q = v.trim()),
+              ),
+            ),
+            Expanded(
+              child: ListView(controller: sc, children: [
+                for (final a in shown)
+                  CheckboxListTile(
+                    title: Text(a.name),
+                    subtitle: Text(a.package, style: const TextStyle(fontSize: 11)),
+                    value: chosen.contains(a.package),
+                    onChanged: (on) async {
+                      on == true ? chosen.add(a.package) : chosen.remove(a.package);
+                      await s.setExtraPackages(chosen.toList());
+                      set(() {});
+                    },
+                  ),
+              ]),
+            ),
+          ]),
+        );
+      });
+    },
+  );
 }
