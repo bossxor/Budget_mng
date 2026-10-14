@@ -5,6 +5,7 @@ import 'app_state.dart';
 import 'data/repo.dart';
 import 'lock.dart';
 import 'ui/screens.dart';
+import 'ui/setup_screen.dart';
 import 'ui/theme.dart';
 
 /// 알림 서비스가 화면 없이 호출하는 진입점: 쌓인 알림을 거래로 바꾸고 끝났다고 알린다.
@@ -99,7 +100,9 @@ class _BudgetAppState extends State<BudgetApp> with WidgetsBindingObserver {
               .copyWith(textScaler: TextScaler.linear(widget.state.textScale)),
           child: child!,
         ),
-        home: LockGate(widget.state, child: Shell(widget.state)),
+        home: widget.state.setupDone
+            ? LockGate(widget.state, child: Shell(widget.state))
+            : SetupScreen(widget.state),
       ),
     );
   }

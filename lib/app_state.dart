@@ -55,6 +55,8 @@ class AppState extends ChangeNotifier {
   bool listenerOn = true;
   int rawTotal = 0;
   String myNames = '';
+  /// 초기 설정을 마쳤는지. 이름이 이미 있는 기존 사용자도 마친 것으로 본다.
+  bool setupDone = true;
   int receivable = 0; // 아직 못 받은 정산 금액
   List<LinkSuggestion> suggestions = [];
   List<OverdueItem> overdue = [];
@@ -81,6 +83,7 @@ class AppState extends ChangeNotifier {
     textScale = double.tryParse(await repo.getKv('text_scale') ?? '') ?? 1.0;
     myNames = (await repo.getKv('my_names')) ?? '';
     payAccount = (await repo.getKv('pay_account')) ?? '';
+    setupDone = (await repo.getKv('setup_done')) == '1' || myNames.trim().isNotEmpty;
     customCategories
       ..clear()
       ..addAll(((await repo.getKv('custom_categories')) ?? '')
@@ -286,6 +289,14 @@ class AppState extends ChangeNotifier {
   Future<void> setPayAccount(String v) async {
     payAccount = v;
     await repo.setKv('pay_account', v);
+    notifyListeners();
+  }
+
+  Future<void> finishSetup(String names, String account) async {
+    await setMyNames(names);
+    if (account.isNotEmpty) await setPayAccount(account);
+    await repo.setKv('setup_done', '1');
+    setupDone = true;
     notifyListeners();
   }
 
