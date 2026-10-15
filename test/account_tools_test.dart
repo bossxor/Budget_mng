@@ -68,4 +68,11 @@ void main() {
     await repo.pairTransfers();expect((await repo.summary(now)).expense,1000);
     expect((await repo.monthTx(now)).every((r)=>r.pairId==null),true);
   });
+  test('동시 컬럼 추가의 중복만 허용하고 다른 SQL 오류는 숨기지 않는다',()async{
+    await db.execute('CREATE TABLE migration_probe(id TEXT)');
+    await Future.wait([addColumnSafely(db,'migration_probe','value INTEGER'),addColumnSafely(db,'migration_probe','value INTEGER')]);
+    final columns=await db.rawQuery('PRAGMA table_info(migration_probe)');
+    expect(columns.where((c)=>c['name']=='value'),hasLength(1));
+    await expectLater(addColumnSafely(db,'missing_table','value INTEGER'),throwsA(isA<DatabaseException>()));
+  });
 }
