@@ -101,6 +101,7 @@ class AppState extends ChangeNotifier {
     if (saved > 0 || review > 0) {
       try { await _channel.invokeMethod('ingestResult', {'saved': saved, 'review': review}); } catch (_) {}
     }
+    await repo.pairTransfers();
     rows = await repo.monthTx(month);
     summary = await repo.summary(month);
     accounts = await repo.accounts();

@@ -86,6 +86,8 @@ void main() {
         child: const Text('입력 열기'))))));
     await tester.tap(find.text('입력 열기'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('다음'));
+    await tester.pumpAndSettle();
     expect(tester.getBottomRight(find.widgetWithText(FilledButton, '저장')).dy, lessThanOrEqualTo(766));
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
     tester.view.padding = FakeViewPadding.zero;

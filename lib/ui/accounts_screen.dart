@@ -53,7 +53,7 @@ class AccountsScreen extends StatelessWidget {
           Text('${fmt(total)}원',
               style: const TextStyle(
                   color: Colors.white, fontSize: 32, fontWeight: FontWeight.w800)),
-          Text('알림으로 확인된 잔액의 합이에요',
+          Text('알림 또는 직접 보정한 잔액의 합이에요',
               style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
         ]),
       ),
@@ -112,6 +112,8 @@ class _AccountCard extends StatelessWidget {
     final bal = a.balance ?? 0;
     final goal = a.goalAmount;
     final lines = <String>[];
+    final balanceDate = a.balanceAt;
+    if (balanceDate != null) lines.add('${a.manualBalance ? '보정' : '알림'} 잔액 · ${balanceDate.year}.${balanceDate.month}.${balanceDate.day} 기준');
     if (a.monthlyTarget != null) lines.add('월 목표 ${fmt(a.monthlyTarget!)}원');
     if (a.paysFrom != null) {
       lines.add('대금 결제: ${labelOf[a.paysFrom] ?? a.paysFrom}');
@@ -387,6 +389,9 @@ void _editAccount(BuildContext context, AppState s, AccountRow a,
           Text(a.key, style: Theme.of(ctx).textTheme.bodySmall),
           const SizedBox(height: 8),
           TextField(controller: name, decoration: const InputDecoration(labelText: '이름')),
+          const SizedBox(height:8),
+          OutlinedButton.icon(onPressed: () { Navigator.pop(ctx); _accountTools(context,s,a); },
+            icon:const Icon(Icons.link_rounded),label:const Text('계좌 연결·잔액 보정')),
           const SizedBox(height: 16),
           const Text('어떤 주머니인가요?', style: TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
@@ -517,4 +522,48 @@ Future<void> _addAccount(BuildContext context, AppState s) async {
         ]),
       )));
   } finally { name.dispose(); }
+}
+Future<void> _accountTools(BuildContext context, AppState s, AccountRow account) async {
+  final balance=TextEditingController();
+  DateTime date=DateTime.now();
+  String? target,error;
+  bool busy=false;
+  final candidates=s.accounts.where((a)=>a.key!=account.key && _looksLikeCard(a.key)==_looksLikeCard(account.key)).toList();
+  try {
+    await showModalBottomSheet<void>(context:context,useSafeArea:true,isScrollControlled:true,showDragHandle:true,
+      builder:(ctx)=>StatefulBuilder(builder:(ctx,setS)=>SingleChildScrollView(
+        padding:EdgeInsets.fromLTRB(22,0,22,22+MediaQuery.of(ctx).viewInsets.bottom+MediaQuery.of(ctx).padding.bottom),
+        child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[
+          Text(account.label,style:const TextStyle(fontSize:22,fontWeight:FontWeight.w700)),
+          const SizedBox(height:18),
+          const Text('알림 통장을 내가 등록한 통장에 연결',style:TextStyle(fontWeight:FontWeight.w600)),
+          const SizedBox(height:8),
+          const Text('같은 실제 통장이 서로 다른 이름으로 표시될 때 연결하세요. 기존 거래·배분 계획을 선택한 통장으로 모읍니다.'),
+          const SizedBox(height:12),
+          DropdownButtonFormField<String>(initialValue:target,isExpanded:true,decoration:const InputDecoration(labelText:'연결할 내 통장'),
+            items:[for(final a in candidates)DropdownMenuItem(value:a.key,child:Text(a.label))],onChanged:busy?null:(v)=>setS(()=>target=v)),
+          const SizedBox(height:8),
+          OutlinedButton(onPressed:busy||target==null?null:()async{
+            setS(()=>busy=true);
+            try{await s.repo.linkAccount(account.key,target!);await s.refresh();if(ctx.mounted)Navigator.pop(ctx);}
+            catch(_){if(ctx.mounted)setS((){busy=false;error='연결할 통장을 확인해 주세요.';});}
+          },child:const Text('선택한 통장에 연결')),
+          const Divider(height:32),
+          const Text('잔액·기준일 보정',style:TextStyle(fontWeight:FontWeight.w600)),
+          const SizedBox(height:8),
+          const Text('기준 시점에 확인한 실제 잔액을 입력하세요. 더 최신 잔액 알림이 오면 그 값을 사용합니다. 지출 거래는 만들지 않아요.'),
+          const SizedBox(height:12),
+          TextField(controller:balance,keyboardType:const TextInputType.numberWithOptions(signed:true),decoration:const InputDecoration(labelText:'실제 잔액',suffixText:'원')),
+          ListTile(contentPadding:EdgeInsets.zero,title:Text('기준일 ${date.year}.${date.month}.${date.day}'),trailing:const Icon(Icons.calendar_month_outlined),
+            onTap:busy?null:()async{final d=await showDatePicker(context:ctx,initialDate:date,firstDate:DateTime(2000),lastDate:DateTime.now());if(d!=null)setS(()=>date=DateTime(d.year,d.month,d.day));}),
+          if(error!=null)Text(error!,style:TextStyle(color:Theme.of(ctx).colorScheme.error)),
+          SizedBox(width:double.infinity,child:FilledButton(onPressed:busy?null:()async{
+            final value=int.tryParse(balance.text.replaceAll(',','').trim());
+            if(value==null){setS(()=>error='잔액을 입력하세요');return;}
+            setS(()=>busy=true);
+            await s.repo.correctBalance(account.key,value,date);await s.refresh();if(ctx.mounted)Navigator.pop(ctx);
+          },child:const Text('잔액 보정 저장'))),
+          TextButton(onPressed:busy?null:()async{await s.repo.correctBalance(account.key,null,DateTime.now());await s.refresh();if(ctx.mounted)Navigator.pop(ctx);},child:const Text('보정 해제 · 알림 잔액 사용')),
+        ]))));
+  } finally { balance.dispose(); }
 }

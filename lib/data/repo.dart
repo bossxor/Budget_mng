@@ -9,6 +9,8 @@ import 'extras.dart';
 import 'planning_repo.dart';
 import 'settlement_repo.dart';
 
+part 'account_tools.dart';
+
 class TxRow {
   TxRow(this.id, this.type, this.amount, this.title, this.category,
       this.occurredAt, this.account, this.status, this.memo);
@@ -21,6 +23,7 @@ class TxRow {
   final String? account;
   final String status; // ok | review
   final String? memo;
+  String? pairId, destination, route, direction;
   String? note; // 사용자 메모
 
   /// 정산에 묶인 지출이면 내 몫, 아니면 null.
@@ -42,7 +45,10 @@ class TxRow {
         m['account'] as String?,
         (m['status'] ?? 'ok') as String,
         m['memo'] as String?,
-      )..note = m['note'] as String?;
+      )..note = m['note'] as String?
+       ..pairId = m['pair_id'] as String?
+       ..destination = m['destination'] as String?
+       ..direction = m['dir'] as String?;
 }
 
 class TxSplit {
@@ -69,11 +75,13 @@ class SourceStatus {
 
 class AccountRow {
   AccountRow(this.key, this.label, this.role, this.balance,
-      {this.monthlyTarget, this.goalAmount, this.goalDate, this.paysFrom});
+      {this.monthlyTarget, this.goalAmount, this.goalDate, this.paysFrom, this.balanceAt, this.manualBalance = false});
   final String key;
   final String label;
   final String role;
   final int? balance;
+  final DateTime? balanceAt;
+  final bool manualBalance;
   final int? monthlyTarget; // 매월 채우기로 한 금액
   final int? goalAmount; // 목표 금액
   final DateTime? goalDate; // 목표 기한
@@ -173,6 +181,7 @@ class Repo {
       id TEXT PRIMARY KEY, tx_id TEXT, category TEXT, amount INTEGER, memo TEXT)''');
     await BudgetRepo.schema(d);
     await SettlementRepo.schema(d);
+    await ensureAccountTools(d);
   }
 
   // ---- kv ----
@@ -293,7 +302,7 @@ class Repo {
       memo = '미분류';
     }
     final id = _newId();
-    final acctKey = t.account ?? t.card;
+    final acctKey = await resolveAccount(t.account ?? t.card);
     if (status == 'ok' &&
         t.balance != null &&
         acctKey != null &&
@@ -325,7 +334,7 @@ class Repo {
       'counterparty': t.counterparty,
       'category': t.category,
       'occurred_at': at,
-      'account': t.account ?? t.card,
+      'account': await resolveAccount(t.account ?? t.card),
       'source': t.source,
       'status': status,
       'raw_id': rawId,
@@ -336,7 +345,7 @@ class Repo {
       'updated_at': DateTime.now().millisecondsSinceEpoch,
     });
     if (t.account != null || t.card != null) {
-      final key = (t.account ?? t.card)!;
+      final key = (await resolveAccount(t.account ?? t.card))!;
       if (t.type != 'group') {
         await _db.insert('account', {'key': key, 'label': key},
             conflictAlgorithm: ConflictAlgorithm.ignore);
@@ -348,21 +357,8 @@ class Repo {
 
   /// 다른 계좌에서 같은 금액의 반대 거래가 5분 안에 있으면 둘 다 이체로 묶는다.
   Future<void> _pairTransfers(String id, ParsedTx t, int at) async {
-    if (t.type != 'expense' && t.type != 'income') return;
-    final opposite = t.type == 'expense' ? 'income' : 'expense';
-    final mine = t.account ?? t.card;
-    final r = await _db.query('tx',
-        where:
-            "type=? AND amount=? AND ABS(occurred_at-?)<=300000 AND deleted_at IS NULL AND id<>? AND IFNULL(account,'')<>?",
-        whereArgs: [opposite, t.amount, at, id, mine ?? ''],
-        limit: 1);
-    if (r.isEmpty || t.amount <= 0) return;
-    for (final x in [id, r.first['id'] as String]) {
-      await _db.update('tx', {'type': 'transfer'},
-          where: 'id=?', whereArgs: [x]);
-    }
+    await pairTransfers();
   }
-
   Future<void> addManual({
     required String type,
     required int amount,
@@ -401,6 +397,17 @@ class Repo {
     for (final t in rows) {
       t.mine = mine[t.id];
       t.paid = paid[t.id] ?? 0;
+    }
+    final labels = {for (final a in await accounts()) a.key: a.label};
+
+    for (final row in rows) {
+      final other = row.destination;
+
+      if (row.type == 'transfer' && other != null && row.account != null) {
+        final from = row.direction == 'in' ? other : row.account!;
+        final to = row.direction == 'in' ? row.account! : other;
+        row.route = '${labels[from] ?? from} → ${labels[to] ?? to}';
+      }
     }
     return rows;
   }
@@ -564,17 +571,22 @@ class Repo {
       0;
 
   Future<List<AccountRow>> accounts() async {
-    final a = await _db.query('account', orderBy: 'key');
+    final a = await _db.rawQuery('SELECT * FROM account WHERE key NOT IN (SELECT alias FROM account_alias) ORDER BY key');
     final out = <AccountRow>[];
     for (final r in a) {
       final k = r['key'] as String;
       final b = await _db.rawQuery(
-          'SELECT balance FROM tx WHERE account=? AND balance IS NOT NULL ORDER BY occurred_at DESC LIMIT 1',
+          'SELECT balance, occurred_at FROM tx WHERE account=? AND balance IS NOT NULL AND deleted_at IS NULL ORDER BY occurred_at DESC LIMIT 1',
           [k]);
       final gd = r['goal_date'] as int?;
       out.add(AccountRow(k, (r['label'] ?? k) as String,
           (r['role'] ?? 'unset') as String,
-          b.isEmpty ? null : b.first['balance'] as int?,
+          (r['manual_balance_at'] != null && (b.isEmpty || (r['manual_balance_at'] as int) >= (b.first['occurred_at'] as int)))
+              ? r['manual_balance'] as int? : (b.isEmpty ? null : b.first['balance'] as int?),
+          balanceAt: (r['manual_balance_at'] != null && (b.isEmpty || (r['manual_balance_at'] as int) >= (b.first['occurred_at'] as int)))
+              ? DateTime.fromMillisecondsSinceEpoch(r['manual_balance_at'] as int)
+              : b.isEmpty ? null : DateTime.fromMillisecondsSinceEpoch(b.first['occurred_at'] as int),
+          manualBalance: r['manual_balance_at'] != null && (b.isEmpty || (r['manual_balance_at'] as int) >= (b.first['occurred_at'] as int)),
           monthlyTarget: r['monthly_target'] as int?,
           goalAmount: r['goal_amount'] as int?,
           goalDate:
@@ -616,35 +628,8 @@ class Repo {
 
   // ---- edits ----
   /// 분류를 바꾸고 같은 가맹점에 학습 규칙을 남긴다. 검토 상태는 해제.
-  Future<void> setCategory(TxRow t, String category) async {
-    await _db.update(
-        'tx',
-        {
-          'category': category,
-          'status': 'ok',
-          'memo': null,
-          'updated_at': DateTime.now().millisecondsSinceEpoch
-        },
-        where: 'id=?',
-        whereArgs: [t.id]);
-    if (t.title != '(알 수 없음)') {
-      await _db.insert('rule', {'keyword': t.title, 'category': category},
-          conflictAlgorithm: ConflictAlgorithm.replace);
-    }
-  }
-
-  /// 이체로 바꿀 때 원래 방향(out/in)을 보존한다.
-  Future<void> setType(String id, String type) async {
-    if (type == 'transfer') {
-      await _db.rawUpdate(
-          "UPDATE tx SET dir = CASE type WHEN 'expense' THEN 'out' WHEN 'income' THEN 'in' ELSE dir END, type='transfer', status='ok', memo=NULL WHERE id=?",
-          [id]);
-    } else {
-      await _db.update('tx', {'type': type, 'status': 'ok', 'memo': null},
-          where: 'id=?', whereArgs: [id]);
-    }
-  }
-
+  Future<void> setCategory(TxRow t, String category) => classifyTx(t.id, category: category);
+  Future<void> setType(String id, String type) => classifyTx(id, type: type);
   /// 이름·금액·날짜·메모를 고친다. 이름은 표시용 가맹점(merchant)에 저장해 입금자명 매칭은 그대로 둔다.
   Future<void> updateTx(String id,
       {String? title, int? amount, DateTime? at, String? note}) async {
@@ -653,13 +638,29 @@ class Repo {
     if (amount != null) v['amount'] = amount;
     if (at != null) v['occurred_at'] = at.millisecondsSinceEpoch;
     if (note != null) v['note'] = note.trim().isEmpty ? null : note.trim();
-    await _db.update('tx', v, where: 'id=?', whereArgs: [id]);
+    await _db.transaction((db) async {
+      await db.update('tx', v, where: 'id=?', whereArgs: [id]);
+      if (amount != null || at != null) {
+        final row = (await db.query('tx', where: 'id=?', whereArgs: [id])).first;
+        if (row['pair_id'] != null) { await db.update('tx', {
+          'amount': ?amount,
+          if(at != null) 'occurred_at': at.millisecondsSinceEpoch,
+          'updated_at': DateTime.now().millisecondsSinceEpoch,
+        }, where: 'id=?', whereArgs: [row['pair_id']]); }
+      }
+    });
   }
 
   Future<void> confirm(String id) => _db.update(
       'tx', {'status': 'ok', 'memo': null}, where: 'id=?', whereArgs: [id]);
 
-  Future<void> delete(String id) => _db.update(
-      'tx', {'deleted_at': DateTime.now().millisecondsSinceEpoch},
-      where: 'id=?', whereArgs: [id]);
+  Future<void> delete(String id) async {
+    await _db.transaction((db) async {
+      final rows=await db.query('tx',where:'id=?',whereArgs:[id]);
+      if(rows.isEmpty)return;
+      for(final key in [id, if(rows.first['pair_id']!=null)rows.first['pair_id'] as String]) {
+        await db.update('tx',{'deleted_at':DateTime.now().millisecondsSinceEpoch,'updated_at':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[key]);
+      }
+    });
+  }
 }

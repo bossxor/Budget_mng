@@ -65,6 +65,11 @@ class PlanningRepo {
       labels[k] = (m['label'] ?? k) as String;
       if (savingRoles.contains(m['role'])) saving.add(k);
     }
+    for(final alias in await _db.query('account_alias')) {
+      final key=alias['alias'] as String, canonical=alias['canonical'] as String;
+      labels[key]=labels[canonical]??canonical;
+      if(saving.contains(canonical)) { saving.add(key); } else { saving.remove(key); }
+    }
     return (labels: labels, savingKeys: saving);
   }
 
@@ -98,7 +103,7 @@ class PlanningRepo {
           var paid = 0;
           for (final t in tr) {
             if (t['account'] == p.fromKey &&
-                _matches(t['counterparty'] as String?, p.toKey, acc.labels)) {
+                (t['destination'] == p.toKey || _matches(t['counterparty'] as String?, p.toKey, acc.labels))) {
               paid += t['amount'] as int;
             }
           }
@@ -118,7 +123,7 @@ class PlanningRepo {
         acc.savingKeys.any((k) => _matches(who, k, acc.labels));
 
     bool paired(Map<String, Object?> t) => outs.any((o) =>
-        o['amount'] == t['amount'] &&
+        (t['pair_id'] == o['id'] || (t['pair_id'] == null && o['amount'] == t['amount'] && (o['account'] == t['counterparty'] || t['account'] == o['counterparty']))) &&
         ((o['occurred_at'] as int) - (t['occurred_at'] as int)).abs() <= 300000);
 
     var saved = 0, withdrawn = 0;
@@ -128,7 +133,7 @@ class PlanningRepo {
       final cp = t['counterparty'] as String?;
       final fromSaving = account != null && acc.savingKeys.contains(account);
       if (t['dir'] == 'out') {
-        final dest = toSaving(cp);
+        final dest = toSaving(t['destination'] as String? ?? cp) || ['적금', '여행저축', '비상금'].contains(t['category']);
         if (dest && !fromSaving) saved += amt;
         if (fromSaving && !dest) withdrawn += amt;
       } else if (t['dir'] == 'in') {

@@ -15,6 +15,8 @@ const _iterations = 60000;
 const _tables = [
   'tx',
   'account',
+  'account_alias',
+  'classification_history',
   'rule',
   'person',
   'settlement',

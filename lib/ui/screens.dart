@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'settlement_screens.dart';
 import 'theme.dart';
+import 'guided_entry.dart';
 
 String fmt(int n) {
   final s = n.abs().toString();
@@ -88,7 +89,8 @@ class TxTile extends StatelessWidget {
       _ => (catIcon(t.category), Dsn.cat(t.category)),
     };
     final sub = [
-      if (t.type == 'transfer') '내 계좌 간 이체',
+      if (t.type == 'transfer') t.category ?? '내 계좌 이체',
+      if (t.type == 'transfer' && t.pairId != null) '입출금 연결',
       if (t.type == 'group') '모임통장',
       if (t.type == 'income') t.paid > 0 ? '입금 · 정산 ${fmt(t.paid)}원 연결' : '입금',
       if (t.type == 'expense') t.category ?? '미분류',
@@ -108,7 +110,7 @@ class TxTile extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
                 Flexible(
-                    child: Text(t.title,
+                    child: Text(t.route ?? t.title,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
                 if (t.status == 'review')
@@ -441,7 +443,7 @@ class HomeScreen extends StatelessWidget {
       ..sort((a, b) => b.value.compareTo(a.value));
     final maxV = cats.isEmpty ? 1 : cats.first.value;
     final net = sm.income - sm.expense;
-    final recent = s.rows.where((t) => t.type != 'group').take(4).toList();
+    final recent = collapseTransfers(s.rows).where((t) => t.type != 'group').take(4).toList();
     return RefreshIndicator(
       onRefresh: s.refresh,
       child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.fromLTRB(20, 12, 20, 28), children: [
@@ -743,13 +745,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ? s.rows
         : s.rows.where((t) => t.account != null && keys.contains(t.account)).toList();
     final groups = <DateTime, List<TxRow>>{};
-    for (final t in rows) {
+    for (final t in collapseTransfers(rows)) {
       final d = DateTime(t.occurredAt.year, t.occurredAt.month, t.occurredAt.day);
       groups.putIfAbsent(d, () => []).add(t);
     }
     final days = groups.keys.toList()..sort((a, b) => b.compareTo(a));
     final bankAccts = s.accounts
-        .where((a) => !RegExp(r'^[가-힣A-Za-z]+d{4}$').hasMatch(a.key))
+        .where((a) => !RegExp(r'^[가-힣A-Za-z]+\d{4}$').hasMatch(a.key))
         .toList();
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -860,17 +862,17 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
     showDragHandle: true,
     isScrollControlled: true,
     builder: (ctx) => SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(t.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
           Amount(t, big: true),
           const SizedBox(height: 20),
-          const Text('카테고리', style: TextStyle(fontWeight: FontWeight.w600)),
+          Text(t.type == 'transfer' ? '이체 목적' : '카테고리', style: const TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           Wrap(spacing: 8, runSpacing: 8, children: [
-            for (final c in allCategories)
+            for (final c in (t.type == 'transfer' ? transferPurposes : allCategories))
               ChoiceChip(
                 avatar: Icon(catIcon(c), size: 18, color: Dsn.cat(c)),
                 label: Text(c),
@@ -878,7 +880,7 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
                 onSelected: (_) async {
                   await s.repo.setCategory(t, c);
                   await s.refresh();
-                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (ctx.mounted) { Navigator.pop(ctx); }
                 },
               ),
             ActionChip(
@@ -907,10 +909,20 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
                 await s.addCategory(name);
                 await s.repo.setCategory(t, name.replaceAll(',', ' '));
                 await s.refresh();
-                if (ctx.mounted) Navigator.pop(ctx);
+                if (ctx.mounted) { Navigator.pop(ctx); }
               },
             ),
           ]),
+          TextButton.icon(
+            icon: const Icon(Icons.undo_rounded), label: const Text('최근 분류 변경 되돌리기'),
+            onPressed: () async {
+              final restored = await s.repo.undoClassification(t.id);
+              await s.refresh();
+              if (ctx.mounted) { Navigator.pop(ctx); }
+              if (context.mounted) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(restored ? '분류와 학습 규칙을 이전 상태로 되돌렸어요.' : '되돌릴 변경이 없거나 이후 분류가 달라졌어요.'))); }
+            },
+          ),
           if (t.note != null)
             Padding(
               padding: const EdgeInsets.only(top: 12),
@@ -930,7 +942,7 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
                   onPressed: () async {
                     await s.repo.confirm(t.id);
                     await s.refresh();
-                    if (ctx.mounted) Navigator.pop(ctx);
+                    if (ctx.mounted) { Navigator.pop(ctx); }
                   },
                   child: const Text('확인 완료')),
             OutlinedButton(
@@ -951,14 +963,14 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
                   onPressed: () async {
                     await s.repo.setType(t.id, 'transfer');
                     await s.refresh();
-                    if (ctx.mounted) Navigator.pop(ctx);
+                    if (ctx.mounted) { Navigator.pop(ctx); }
                   },
                   child: const Text('내 계좌 간 이체로 표시')),
             OutlinedButton(
                 onPressed: () async {
                   await s.repo.delete(t.id);
                   await s.refresh();
-                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (ctx.mounted) { Navigator.pop(ctx); }
                 },
                 child: const Text('삭제')),
           ]),
@@ -1033,7 +1045,7 @@ Future<void> showTxForm(BuildContext context, AppState s, TxRow t) {
                 await s.repo.updateTx(t.id,
                     title: title.text, amount: a, at: at, note: note.text);
                 await s.refresh();
-                if (ctx.mounted) Navigator.pop(ctx);
+                if (ctx.mounted) { Navigator.pop(ctx); }
               },
               child: const Text('저장'),
             ),
@@ -1045,69 +1057,9 @@ Future<void> showTxForm(BuildContext context, AppState s, TxRow t) {
 }
 
 Future<bool?> showManualEntry(BuildContext context, AppState s,
-    {String? initialType, int? initialAmount, String? initialTitle}) {
-  final amt = TextEditingController(text: initialAmount?.toString() ?? '');
-  final title = TextEditingController(text: initialTitle ?? '');
-  var type = initialType ?? 'expense';
-  String? error;
-  return showModalBottomSheet<bool>(
-    context: context,
-    useSafeArea: true,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setS) => SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(
-            20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'expense', label: Text('쓴 돈')),
-              ButtonSegment(value: 'income', label: Text('받은 돈')),
-            ],
-            selected: {type},
-            onSelectionChanged: (v) => setS(() => type = v.first),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: amt,
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-            decoration: InputDecoration(
-                labelText: '금액', suffixText: '원', errorText: error),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: title,
-            decoration: const InputDecoration(labelText: '내용 (예: 점심, 현금 용돈)'),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: () async {
-                final v = int.tryParse(amt.text.replaceAll(',', ''));
-                if (v == null || v <= 0) {
-                  setS(() => error = '금액을 입력하세요');
-                  return;
-                }
-                await s.repo.addManual(
-                    type: type,
-                    amount: v,
-                    title: title.text.trim().isEmpty ? '현금' : title.text.trim());
-                await s.refresh();
-                if (ctx.mounted) Navigator.pop(ctx, true);
-              },
-              child: const Text('저장'),
-            ),
-          ),
-        ]),
-      ),
-    ),
-  );
-}
-
+    {String? initialType, int? initialAmount, String? initialTitle}) =>
+    showGuidedEntry(context, s, initialType: initialType,
+      initialAmount: initialAmount, initialTitle: initialTitle);
 class ReviewScreen extends StatefulWidget {
   const ReviewScreen(this.s, {super.key});
   final AppState s;
