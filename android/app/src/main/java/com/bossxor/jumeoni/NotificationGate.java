@@ -7,6 +7,7 @@ import java.util.Set;
 
 /** 금융 출처 보호는 원문 저장 전에도 적용한다. Android API 없이 검증 가능한 정책. */
 public final class NotificationGate {
+    // lib/core/notification_policy.dart 와 같은 목록을 유지해야 한다 (은행 앱 추가 시 양쪽 모두 수정).
     public static final Set<String> BANK_APPS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
         "com.nonghyup.nhallonebank", "com.kakaobank.channel", "viva.republica.toss")));
     public static final Set<String> SMS_APPS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(

@@ -90,14 +90,13 @@ class NotifService : NotificationListenerService() {
 
         val whole = "$title\n$text"
         val extrasPackages = extraPackages()
-        if (!NotificationGate.isProtected(pkg, title, extrasPackages) && muted(pkg, title)) return
         val financial = FINANCE_WORDS.containsMatchIn(whole) && !AD_WORDS.containsMatchIn(whole)
         val allowed = when (pkg) {
             in BANK_APPS, in SMS_APPS -> financial
             in extrasPackages -> financial
             KAKAO -> title in KAKAO_TITLES && !AD_WORDS.containsMatchIn(whole)
             SHELL -> debuggable
-            else -> looksLikeTransaction(whole)
+            else -> looksLikeTransaction(whole) && !muted(pkg, title)
         }
         if (!allowed) return
 

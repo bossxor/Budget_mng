@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+// NotificationGate.java 와 같은 목록을 유지해야 한다 (은행 앱 추가 시 양쪽 모두 수정).
 const bankNotificationApps = {
   'com.nonghyup.nhallonebank',
   'com.kakaobank.channel',

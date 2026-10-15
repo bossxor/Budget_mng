@@ -78,11 +78,12 @@ void main() {
               .single['verdict'],
           reject ? 'no' : 'fixed',
         );
-        if (reject)
+        if (reject) {
           expect(
             await tester.runAsync(() => repo.notificationMuteRules()),
             hasLength(1),
           );
+        }
       },
     );
   }
