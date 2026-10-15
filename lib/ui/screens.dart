@@ -163,24 +163,30 @@ class _ShellState extends State<Shell> {
     _native.setMethodCallHandler((call) async {
       if (call.method == 'launchAction') {
         _run(await _native.invokeMethod<String>('takeLaunchAction'));
+        await _native.invokeMethod('requestNotificationsOnce');
       }
     });
     // 바로가기로 앱이 새로 켜진 경우.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         _run(await _native.invokeMethod<String>('takeLaunchAction'));
+        await _native.invokeMethod('requestNotificationsOnce');
       } catch (_) {}
     });
   }
 
   void _run(String? action) {
-    if (action != 'quick_add' || !mounted) return;
+    if (!mounted || (action != 'quick_add' && action != 'review' && action != 'history')) return;
     if (widget.s.lock.locked) {
       _pendingAction = action;
       return;
     }
     setState(() => _i = 1); // 내역 탭에서 입력 시트를 연다
-    showManualEntry(context, widget.s);
+    if (action == 'review') {
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReviewScreen(widget.s)));
+    } else if (action == 'quick_add') {
+      showManualEntry(context, widget.s);
+    }
   }
 
   void _resumeAction() {

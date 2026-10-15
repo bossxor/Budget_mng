@@ -195,7 +195,7 @@ ParsedTx? parseNotification(String raw, DateTime received) {
     );
   }
 
-  return null;
+  return parseBankTransfer(t, received);
 }
 
 /// 알림의 제목과 본문을 한 덩어리로 합친다. 카카오뱅크처럼 '입금 82원'이 제목에 오는 경우가 있다.
@@ -213,4 +213,31 @@ String joinNotification(String? title, String text) =>
   final first = t.split('\n').firstWhere((l) => l.trim().isNotEmpty, orElse: () => '');
   final title = first.length > 20 ? first.substring(0, 20) : first;
   return (amount: amount, type: type, title: title);
+}
+
+/// NH 실측 형식과 앱에 종속되지 않는 명확한 입출금/결제 알림.
+ParsedTx? parseBankTransfer(String raw, DateTime received) {
+  final text = _normalize(raw).replaceAll('입출금 알림', '');
+  if (RegExp(r'\(광고\)|수신거부|알림\s*끄기|인증번호|인증코드|OTP|입금\s*요청|송금\s*요청|출금\s*예정|입금\s*예정|결제\s*예정|이체\s*예정|예약|실패|거절|취소|환불|해주세요|부탁', caseSensitive: false).hasMatch(text)) { return null; }
+  final nh = RegExp(r'(?:농협|NH농협|NH올원뱅크)\s*(입금|출금)\s*([\d,]{1,18})원\s*\n(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})\s+([\d*•Xx-]{6,})\s*(.*?)\s*잔액\s*([\d,]{1,18})원', multiLine: true).firstMatch(text);
+  if (nh != null) {
+    return ParsedTx(source: 'nhallone', type: nh[1] == '입금' ? 'income' : 'expense',
+      amount: _n(nh[2]!), occurredAt: _inferDate(received, int.parse(nh[3]!), int.parse(nh[4]!), int.parse(nh[5]!), int.parse(nh[6]!)),
+      account: '농협 ${nh[7]}', counterparty: nh[8]!.trim().isEmpty ? null : nh[8]!.trim(), balance: _n(nh[9]!));
+  }
+  final forward = RegExp(r'(입금|출금|입금액|출금액|결제|승인)(?:완료)?\s*[:：]?\s*([\d,]{1,18})\s*원').firstMatch(text);
+  final backward = RegExp(r'([\d,]{1,18})\s*원(?:이|을)?\s*(입금|출금|결제|승인)').firstMatch(text);
+  final direction = forward?[1] ?? backward?[2];
+  final value = forward?[2] ?? backward?[1];
+  if (direction == null || value == null || _n(value) <= 0) { return null; }
+  // 서로 다른 방향이 함께 나타나면 추측 저장 대신 검토함에 남긴다.
+  if (RegExp(r'입금\s*[:：]?\s*[\d,]{1,18}\s*원').hasMatch(text) &&
+      RegExp(r'출금\s*[:：]?\s*[\d,]{1,18}\s*원').hasMatch(text)) { return null; }
+  final incoming = direction.startsWith('입금');
+  final account = RegExp(r'(?:계좌|통장)(?:번호)?\s*[:：]\s*([^\n]+)').firstMatch(text)?[1]?.trim();
+  final balance = RegExp(r'잔액\s*[:：]?\s*([\d,]{1,18})\s*원').firstMatch(text)?[1];
+  final party = RegExp(r'(?:내용|입금자|출금처|가맹점)\s*[:：]\s*([^\n]+)').firstMatch(text)?[1]?.trim();
+  return ParsedTx(source: 'auto', type: incoming ? 'income' : 'expense', amount: _n(value), occurredAt: received,
+    account: account, balance: balance == null ? null : _n(balance),
+    counterparty: incoming ? party ?? '입금' : null, merchant: incoming ? null : party ?? '출금·결제');
 }

@@ -11,15 +11,18 @@ import 'ui/theme.dart';
 /// 알림 서비스가 화면 없이 호출하는 진입점: 쌓인 알림을 거래로 바꾸고 끝났다고 알린다.
 @pragma('vm:entry-point')
 Future<void> backgroundMain() async {
+  final result = <String, int>{};
   WidgetsFlutterBinding.ensureInitialized();
   try {
     final repo = await Repo.open();
-    await repo.runBackgroundIngest();
+    await repo.runBackgroundIngest(onComplete: (saved, review) {
+      result['saved'] = saved; result['review'] = review;
+    });
   } catch (_) {
     // 실패해도 원문은 남아 있어 앱을 열 때 다시 처리된다.
   } finally {
     try {
-      await const MethodChannel('jumeoni/bg').invokeMethod('done');
+      await const MethodChannel('jumeoni/bg').invokeMethod('done', result);
     } catch (_) {}
   }
 }

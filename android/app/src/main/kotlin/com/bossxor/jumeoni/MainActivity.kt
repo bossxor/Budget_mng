@@ -1,5 +1,9 @@
 package com.bossxor.jumeoni
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -11,7 +15,31 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
     companion object {
+        const val REVIEW = "com.bossxor.jumeoni.REVIEW"
+        const val HISTORY = "com.bossxor.jumeoni.HISTORY"
         const val QUICK_ADD = "com.bossxor.jumeoni.QUICK_ADD"
+    }
+
+    private var permissionResult: MethodChannel.Result? = null
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        permissionResult?.success(granted)
+        permissionResult = null
+    }
+    private fun requestNotifications(result: MethodChannel.Result, once: Boolean) {
+        ResultNotifications.channels(this)
+        val prefs = getSharedPreferences("result_notifications", MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            if (!once) startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+            result.success(true)
+        } else if (!prefs.getBoolean("asked", false)) {
+            if (permissionResult != null) { result.success(false); return }
+            prefs.edit().putBoolean("asked", true).apply()
+            permissionResult = result
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            if (!once) startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+            result.success(false)
+        }
     }
 
     private var channel: MethodChannel? = null
@@ -33,7 +61,7 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun actionOf(i: Intent?): String? =
-        if (i?.action == QUICK_ADD) "quick_add" else null
+        when (i?.action) { QUICK_ADD -> "quick_add"; REVIEW -> "review"; HISTORY -> "history"; else -> null }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -41,6 +69,12 @@ class MainActivity : FlutterFragmentActivity() {
         channel = ch
         ch.setMethodCallHandler { call, result ->
             when (call.method) {
+                "requestNotificationsOnce" -> requestNotifications(result, true)
+                "requestNotifications" -> requestNotifications(result, false)
+                "ingestResult" -> {
+                    ResultNotifications.post(this, call.arguments as? Map<*, *>)
+                    result.success(null)
+                }
                 "isListenerEnabled" ->
                     result.success(NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName))
                 "openListenerSettings" -> {

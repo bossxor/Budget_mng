@@ -15,6 +15,7 @@ class NotifService : NotificationListenerService() {
 
     companion object {
         private val BANK_APPS = setOf(
+            "com.nonghyup.nhallonebank",
             "com.kakaobank.channel",   // 카카오뱅크
             "viva.republica.toss",     // 토스
         )
@@ -29,7 +30,7 @@ class NotifService : NotificationListenerService() {
         private val KAKAO_TITLES = setOf("삼성카드")
         // 금액 알림만 저장한다: 금융 키워드가 있고 광고/수신거부 문구가 없어야 한다.
         private val FINANCE_WORDS = Regex("입금|출금|승인|취소|결제|이체|송금|잔액")
-        private val AD_WORDS = Regex("\\(광고\\)|수신거부|알림끄기|무료수신")
+        private val AD_WORDS = Regex("\\(광고\\)|수신거부|알림\\s*끄기|무료수신|인증번호|인증코드|OTP")
     }
 
     private val debuggable: Boolean
@@ -53,14 +54,28 @@ class NotifService : NotificationListenerService() {
         return msgs.lastOrNull()?.text?.toString()
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        // 설치/재연결 시 현재 알림창에 남은 거래도 원래 수신 시각으로 수집한다.
+        try { activeNotifications?.forEach { onNotificationPosted(it) } } catch (_: Exception) { }
+    }
+
+    private fun looksLikeTransaction(text: String): Boolean {
+        val value = text.replace("입출금 알림", "")
+        if (Regex("\\(광고\\)|수신거부|알림\\s*끄기|인증번호|인증코드|OTP|요청|예정|예약|실패|거절|해주세요|부탁", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
+        return Regex("(?:입금|출금|결제|승인)(?:완료|액)?\\s*[:：]?\\s*[\\d,]+\\s*원|[\\d,]+\\s*원(?:이|을)?\\s*(?:입금|출금|결제|승인)").containsMatchIn(value)
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        if (sbn.packageName == packageName || (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
         val pkg = sbn.packageName
         val extras = sbn.notification.extras
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-        val text = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
-            ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString()
-            ?: messagingText(extras)
-            ?: return
+        val text = listOf(
+            extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
+            extras.getCharSequence(Notification.EXTRA_TEXT)?.toString(),
+            messagingText(extras)
+        ).firstOrNull { !it.isNullOrBlank() } ?: return
         if (text.isBlank()) return
 
         val whole = "$title\n$text"
@@ -70,7 +85,7 @@ class NotifService : NotificationListenerService() {
             in extraPackages() -> financial
             KAKAO -> title in KAKAO_TITLES && !AD_WORDS.containsMatchIn(whole)
             SHELL -> debuggable
-            else -> false
+            else -> looksLikeTransaction(whole)
         }
         if (!allowed) return
 

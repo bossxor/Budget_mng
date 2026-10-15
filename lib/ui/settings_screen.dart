@@ -524,6 +524,9 @@ class SettingsScreen extends StatelessWidget {
         ),
       ]),
       _Group('알림 수집', [
+        _Row(icon: Icons.notifications_active_outlined, color: Dsn.blue,
+          title: '반영·확인 필요 알림', value: '자동 기록 결과를 알림으로 받아요 · 유형별 끄기는 알림 설정에서',
+          onTap: s.requestResultNotifications),
         _Row(
           icon: s.listenerOn
               ? Icons.notifications_active_rounded
@@ -555,8 +558,8 @@ class SettingsScreen extends StatelessWidget {
         _Row(
           icon: Icons.add_alert_rounded,
           color: Dsn.blue,
-          title: '다른 은행 앱 추가',
-          value: '목록에서 골라 입출금 알림을 같이 모아요',
+          title: '추가 수집 앱 관리',
+          value: '입출금 형태는 자동 수집 · 필요한 앱만 추가 지정',
           onTap: () => _pickApps(context, s),
         ),
         _Row(

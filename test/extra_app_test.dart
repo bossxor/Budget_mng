@@ -16,11 +16,11 @@ void main() {
     await add('com.example.bank', '[예시은행] 입금 12,000원 홍길동');
     await add('com.example.bank', '[예시은행] 출금 3,500원 GS25');
     await add('com.example.bank', '[예시은행] 승인취소 3,500원 GS25'); // 방향 불명 -> 남김
-    await add('com.other.app', '[타앱] 입금 9,000원'); // 추가 안 한 앱 -> 남김
-    expect(await repo.processPending(), 2);
+    await add('com.other.app', '[타앱] 입금 9,000원'); // 추가 안 한 앱도 명확한 입금이면 자동 반영
+    expect(await repo.processPending(), 3);
     final tx = await db.query('tx', columns: ['type', 'amount'], orderBy: 'amount');
     expect(tx.map((r) => '${r['type']}:${r['amount']}'),
-        ['expense:3500', 'income:12000']);
-    expect((await db.query('raw_notification', where: 'state=2')).length, 2);
+        ['expense:3500', 'income:9000', 'income:12000']);
+    expect((await db.query('raw_notification', where: 'state=2')).length, 1);
   });
 }

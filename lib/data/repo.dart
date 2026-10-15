@@ -202,13 +202,25 @@ class Repo {
     return {for (final x in r) x['keyword'] as String: x['category'] as String};
   }
 
+  /// 이전 버전에서 못 읽은 원문 중 새 파서가 확실하게 읽는 것만 재처리한다.
+  Future<int> retryRecognizableNotifications() async {
+    final rows = await _db.query('raw_notification', where: 'state=2');
+    var count = 0;
+    for (final row in rows) {
+      if (parseBankTransfer(joinNotification(row['title'] as String?, row['text'] as String),
+          DateTime.fromMillisecondsSinceEpoch(row['posted_at'] as int)) == null) { continue; }
+      count += await _db.update('raw_notification', {'state': 0},
+          where: 'id=? AND state=2', whereArgs: [row['id']]);
+    }
+    return count;
+  }
   // ---- ingest ----
   int _seq = 0;
   String _newId() =>
       '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}${(_seq++).toRadixString(36)}';
 
   /// 네이티브 서비스가 쌓아 둔 원문을 파싱해 거래로 저장한다. 처리한 건수를 반환.
-  Future<int> processPending() async {
+  Future<int> processPending({void Function(int saved, int review)? onComplete}) async {
     final raws = await _db.query('raw_notification',
         where: 'state=0', orderBy: 'posted_at ASC');
     if (raws.isEmpty) return 0;
@@ -216,6 +228,7 @@ class Repo {
     final learned = await learnedRules();
     final extra = ((await getKv('extra_packages')) ?? '').split(',');
     var saved = 0;
+    var review = 0, failed = 0;
     for (final r in raws) {
       // 앱과 백그라운드 엔진이 동시에 돌아도 같은 알림을 두 번 처리하지 않게 먼저 선점한다.
       final claimed = await _db.rawUpdate(
@@ -229,7 +242,7 @@ class Repo {
       // ponytail: 취소/환불은 방향을 알 수 없어 "인식 못 한 알림"으로 남긴다.
       if (parsed == null &&
           extra.contains(r['package']) &&
-          !raw.contains(RegExp('취소|환불'))) {
+          !raw.contains(RegExp('취소|환불|요청|예정|예약|실패|거절|인증|OTP|광고|부탁|해주세요'))) {
         final g = guessFromText(raw);
         if (g.amount != null && g.amount! > 0) {
           parsed = ParsedTx(
@@ -242,6 +255,8 @@ class Repo {
         }
       }
       if (parsed == null) {
+        if (RegExp('입금|출금|승인|취소|결제|이체|송금|잔액').hasMatch(raw) &&
+            !RegExp(r'\(광고\)|수신거부|알림끄기').hasMatch(raw)) { failed++; }
         await _db.update('raw_notification', {'state': 2},
             where: 'id=?', whereArgs: [r['id']]);
         continue;
@@ -252,15 +267,16 @@ class Repo {
               ? 'in'
               : null;
       classify(parsed, me, learned);
-      await _insertParsed(parsed, r['id'] as int, r['package'] as String, dir);
+      if (await _insertParsed(parsed, r['id'] as int, r['package'] as String, dir)) review++;
       await _db.update('raw_notification', {'state': 1},
           where: 'id=?', whereArgs: [r['id']]);
       saved++;
     }
+    onComplete?.call(saved - review, review + failed);
     return saved;
   }
 
-  Future<void> _insertParsed(
+  Future<bool> _insertParsed(
       ParsedTx t, int rawId, String package, String? dir) async {
     final at = t.occurredAt.millisecondsSinceEpoch;
     var status = 'ok';
@@ -327,6 +343,7 @@ class Repo {
       }
     }
     await _pairTransfers(id, t, at);
+    return status == 'review';
   }
 
   /// 다른 계좌에서 같은 금액의 반대 거래가 5분 안에 있으면 둘 다 이체로 묶는다.
@@ -480,8 +497,8 @@ class Repo {
            text LIKE '%송금%' OR text LIKE '%잔액%'))''');
 
   /// 알림 서비스가 화면 없이 호출하는 처리. 끝난 시각과 건수를 남겨 설정 화면에서 확인할 수 있다.
-  Future<int> runBackgroundIngest({DateTime? now}) async {
-    final n = await processPending();
+  Future<int> runBackgroundIngest({DateTime? now, void Function(int saved, int review)? onComplete}) async {
+    final n = await processPending(onComplete: onComplete);
     await setKv('bg_last_run', '${(now ?? DateTime.now()).millisecondsSinceEpoch}');
     await setKv('bg_last_saved', '$n');
     final total = int.tryParse(await getKv('bg_total_saved') ?? '') ?? 0;

@@ -76,6 +76,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> load() async {
     await repo.recoverClaims();
+    await repo.retryRecognizableNotifications();
     await repo.purgeNoise();
     final keep = int.tryParse(await repo.getKv('raw_keep_days') ?? '') ?? 90;
     await repo.purgeRaw(keep);
@@ -95,7 +96,11 @@ class AppState extends ChangeNotifier {
 
   /// 쌓인 알림을 거래로 변환하고 화면 데이터를 다시 읽는다.
   Future<void> refresh() async {
-    await repo.processPending();
+    var saved = 0, review = 0;
+    await repo.processPending(onComplete: (s, r) { saved = s; review = r; });
+    if (saved > 0 || review > 0) {
+      try { await _channel.invokeMethod('ingestResult', {'saved': saved, 'review': review}); } catch (_) {}
+    }
     rows = await repo.monthTx(month);
     summary = await repo.summary(month);
     accounts = await repo.accounts();
@@ -126,6 +131,10 @@ class AppState extends ChangeNotifier {
     await repo.writeWidgetSnapshot();
     await updateWidgets();
     notifyListeners();
+  }
+
+  Future<void> requestResultNotifications() async {
+    try { await _channel.invokeMethod('requestNotifications'); } catch (_) {}
   }
 
   Future<void> updateWidgets() async {
