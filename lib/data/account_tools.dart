@@ -2,11 +2,17 @@ part of 'repo.dart';
 
 const transferPurposes = ['내 계좌 이체', '생활비 이동', '적금', '여행저축', '비상금', '카드대금'];
 
+Future<void> addColumnSafely(Database db,String table,String column) async {
+  try { await db.execute('ALTER TABLE $table ADD COLUMN $column'); }
+  on DatabaseException catch(error) {
+    if(!error.toString().toLowerCase().contains('duplicate column name')) rethrow;
+  }
+}
 Future<void> ensureAccountTools(Database db) async {
   await db.execute('CREATE TABLE IF NOT EXISTS account_alias(alias TEXT PRIMARY KEY, canonical TEXT NOT NULL)');
   await db.execute('CREATE TABLE IF NOT EXISTS classification_history(id TEXT PRIMARY KEY, tx_id TEXT, before_json TEXT, after_json TEXT, keyword TEXT, rule_before TEXT, rule_after TEXT, created_at INTEGER, undone INTEGER DEFAULT 0)');
   final historyColumns = await db.rawQuery('PRAGMA table_info(classification_history)');
-  if (!historyColumns.any((c) => c['name']=='batch')) await db.execute('ALTER TABLE classification_history ADD COLUMN batch TEXT');
+  if (!historyColumns.any((c) => c['name']=='batch')) await addColumnSafely(db,'classification_history','batch TEXT');
   for (final column in ['pair_id TEXT', 'destination TEXT']) {
     final columns = await db.rawQuery('PRAGMA table_info(tx)');
     if (!columns.any((c) => c['name'] == column.split(' ').first)) await db.execute('ALTER TABLE tx ADD COLUMN $column');
