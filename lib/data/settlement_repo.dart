@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../core/notification_policy.dart';
 
 import 'repo.dart';
 
@@ -222,6 +223,8 @@ class SettlementRepo {
         'created_at': DateTime.now().millisecondsSinceEpoch,
       });
       for (final x in txIds) {
+        final source=await t.query('tx',where:'id=? AND deleted_at IS NULL AND ${confirmedTxFilter()}',whereArgs:[x]);
+        if(source.isEmpty)throw StateError('확인된 거래만 정산에 연결할 수 있어요.');
         await t.insert('settlement_item', {'settlement_id': id, 'tx_id': x});
       }
       for (final e in extras) {
@@ -364,7 +367,7 @@ class SettlementRepo {
     final since = DateTime.now().subtract(const Duration(days: 120)).millisecondsSinceEpoch;
     final r = await _db.rawQuery('''SELECT t.*,
         IFNULL((SELECT SUM(amount) FROM settlement_payment WHERE tx_id=t.id),0) AS paid
-      FROM tx t WHERE t.type='income' AND t.deleted_at IS NULL AND t.occurred_at>=?
+      FROM tx t WHERE t.type='income' AND t.deleted_at IS NULL AND ${confirmedTxFilter('t.')} AND t.occurred_at>=?
       ORDER BY t.occurred_at DESC''', [since]);
     final aliases = await _aliasesOf(personName);
     final out = <DepositCandidate>[];
@@ -387,7 +390,7 @@ class SettlementRepo {
     final since = DateTime.now().subtract(const Duration(days: 120)).millisecondsSinceEpoch;
     final r = await _db.rawQuery('''SELECT t.*,
         IFNULL((SELECT SUM(amount) FROM settlement_payment WHERE tx_id=t.id),0) AS paid
-      FROM tx t WHERE t.type='expense' AND t.amount>0 AND t.deleted_at IS NULL AND t.occurred_at>=?
+      FROM tx t WHERE t.type='expense' AND t.amount>0 AND t.deleted_at IS NULL AND ${confirmedTxFilter('t.')} AND t.occurred_at>=?
         AND t.id NOT IN (SELECT i.tx_id FROM settlement_item i
                          JOIN settlement s ON s.id=i.settlement_id AND s.deleted_at IS NULL)
       ORDER BY t.occurred_at DESC''', [since]);
@@ -418,17 +421,24 @@ class SettlementRepo {
 
   /// 입금을 사람 몫에 연결한다. 입금자명이 다르면 별칭으로 학습한다.
   Future<void> pay(ShareView share, DepositCandidate d, int amount) async {
-    await _db.insert('settlement_payment',
+    await _db.transaction((db)async{
+    final rows=await db.query('tx',where:'id=? AND deleted_at IS NULL AND ${confirmedTxFilter()}',whereArgs:[d.tx.id]);
+    if(rows.isEmpty)throw StateError('알림을 먼저 확인한 뒤 정산에 연결해 주세요.');
+    final paid=await db.rawQuery('SELECT COALESCE(SUM(amount),0) AS total FROM settlement_payment WHERE tx_id=?',[d.tx.id]);
+    if(amount<=0 || amount>(rows.single['amount'] as int)-(paid.single['total'] as int))throw ArgumentError('연결할 금액을 확인해 주세요.');
+    await db.insert('settlement_payment',
         {'id': _id(), 'share_id': share.id, 'tx_id': d.tx.id, 'amount': amount});
     final who = d.tx.title;
     if (share.personId != null && who != share.name && who != '(알 수 없음)') {
-      final r = await _db.query('person', where: 'id=?', whereArgs: [share.personId]);
+      final r = await db.query('person', where: 'id=?', whereArgs: [share.personId]);
+      if(r.isEmpty)return;
       final cur = ((r.first['aliases'] as String?) ?? '').split(',').where((x) => x.isNotEmpty).toSet();
       if (cur.add(who)) {
-        await _db.update('person', {'aliases': cur.join(',')},
+        await db.update('person', {'aliases': cur.join(',')},
             where: 'id=?', whereArgs: [share.personId]);
       }
     }
+    });
   }
 
   Future<List<Map<String, Object?>>> paymentsOf(String shareId) =>
@@ -508,7 +518,7 @@ class SettlementRepo {
   Future<List<TxRow>> settleableExpenses({int days = 60}) async {
     final since = DateTime.now().subtract(Duration(days: days)).millisecondsSinceEpoch;
     final r = await _db.rawQuery('''SELECT t.* FROM tx t
-      WHERE t.type='expense' AND t.amount>0 AND t.deleted_at IS NULL AND t.occurred_at>=?
+      WHERE t.type='expense' AND t.amount>0 AND t.deleted_at IS NULL AND ${confirmedTxFilter('t.')} AND t.occurred_at>=?
         AND t.id NOT IN (SELECT i.tx_id FROM settlement_item i
                          JOIN settlement s ON s.id=i.settlement_id AND s.deleted_at IS NULL)
       ORDER BY t.occurred_at DESC''', [since]);

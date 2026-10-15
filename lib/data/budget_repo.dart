@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../core/notification_policy.dart';
 
 /// 매달 비슷한 금액으로 반복되는 지출 (구독, 통신비 등).
 class Recurring {
@@ -89,7 +90,7 @@ class BudgetRepo {
     final today = now ?? DateTime.now();
     final from = DateTime(today.year, today.month - 5).millisecondsSinceEpoch;
     final r = await _db.rawQuery('''SELECT merchant, amount, occurred_at FROM tx
-      WHERE type='expense' AND amount>0 AND deleted_at IS NULL AND merchant IS NOT NULL
+      WHERE type='expense' AND amount>0 AND deleted_at IS NULL AND ${confirmedTxFilter()} AND merchant IS NOT NULL
         AND occurred_at>=? ORDER BY occurred_at''', [from]);
 
     // 가맹점 -> 달(yyyy*12+mm) -> 그 달 마지막 결제

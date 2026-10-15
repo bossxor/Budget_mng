@@ -132,7 +132,7 @@ void main() {
     await repo.refreshPersonalSuggestions();
     expect(await repo.personalSuggestions(), isEmpty);
   });
-  test('새 알림의 AI 추천은 확인 필요 알림으로 집계하고 승인 전 지출은 유지한다', () async {
+  test('후보 알림은 합계에 넣지 않고 판독과 AI 추천을 한 번에 승인한다', () async {
     await teach('a', 'transfer', '적금', party: '행복적금 자동이체');
     await teach('b', 'transfer', '적금', party: '행복적금 자동이체');
     await db.insert('raw_notification', {
@@ -154,12 +154,16 @@ void main() {
     );
     expect(saved, 0);
     expect(review, 1);
-    final suggestions = await repo.personalSuggestions();
-    expect(suggestions, hasLength(1));
+    expect(await repo.personalSuggestions(),isEmpty);
+    expect((await repo.summary(now)).expense,0);
     final row = (await db.query('tx', where: 'raw_id IS NOT NULL')).single;
     expect(row['type'], 'expense');
+    expect(row['status'],'candidate');
     expect(await repo.personalExampleCount(), 2);
-    await repo.approvePersonalSuggestion(suggestions.values.single);
+    final notification=(await repo.notificationReview(row['id'] as String))!;
+    final suggestion=(await repo.proposeNotificationClassification(notification))!;
+    expect(suggestion.label.category,'적금');
+    await repo.confirmNotification(notification,type:suggestion.label.type,category:suggestion.label.category);
     expect((await repo.summary(now)).expense, 0);
     expect(await repo.personalExampleCount(), 3);
     var called = false;

@@ -127,6 +127,11 @@ void main() {
       'state': 0,
     });
     await repo.processPending();
+    expect(await repo.monthTx(now),isEmpty);
+    final pending=(await repo.reviewList()).single;
+    expect(pending.status,'candidate');
+    expect(pending.account,key);
+    await repo.confirmNotification((await repo.notificationReview(pending.id))!);
     expect((await repo.monthTx(now)).single.account, key);
     expect(await repo.accounts(), hasLength(1));
   });
@@ -177,15 +182,20 @@ void main() {
       'state': 0,
     });
     await repo.processPending();
-    final tx = (await repo.monthTx(now)).single;
+    expect(await repo.monthTx(now),isEmpty);
+    final tx = (await repo.reviewList()).single;
     expect(tx.type, 'transfer');
     expect(tx.account, keys.first);
     expect(tx.destination, keys.last);
     expect((await repo.summary(now)).expense, 0);
-    final suggestion = (await repo.personalSuggestions()).values.single;
-    expect(suggestion.category, '적금');
+    final review=(await repo.notificationReview(tx.id))!;
+    final suggestion = (await repo.proposeNotificationClassification(review))!;
+    expect(suggestion.label.category, '적금');
     expect(suggestion.support, 0);
     expect(await repo.personalExampleCount(), 0);
+    await repo.confirmNotification(review,type:suggestion.label.type,category:suggestion.label.category);
+    expect((await repo.monthTx(now)).single.category,'적금');
+    expect(await repo.personalExampleCount(),1);
   });
   test('다른 기기에서 같은 계좌를 등록한 백업도 중복 없이 병합하고 학습/계획/되돌리기를 보존한다', () async {
     const drafts = [

@@ -6,6 +6,8 @@ import '../core/classify.dart';
 import '../core/parsers.dart';
 import '../core/personal_classifier.dart';
 import '../core/bank_accounts.dart';
+import '../core/notification_policy.dart';
+import '../core/notification_classifier.dart';
 import 'budget_repo.dart';
 import 'extras.dart';
 import 'planning_repo.dart';
@@ -14,6 +16,7 @@ import 'settlement_repo.dart';
 part 'account_tools.dart';
 part 'learning_tools.dart';
 part 'account_registry.dart';
+part 'notification_feedback.dart';
 
 class TxRow {
   TxRow(this.id, this.type, this.amount, this.title, this.category,
@@ -25,7 +28,7 @@ class TxRow {
   final String? category;
   final DateTime occurredAt;
   final String? account;
-  final String status; // ok | review
+  final String status; // ok | review | candidate | rejected
   final String? memo;
   String? pairId, destination, route, direction;
   String? note; // 사용자 메모
@@ -196,6 +199,7 @@ class Repo {
     await ensureAccountTools(d);
     await ensurePersonalLearning(d);
     await ensureAccountRegistry(d);
+    await ensureNotificationFeedback(d);
   }
 
   // ---- kv ----
@@ -248,6 +252,7 @@ class Repo {
 
   /// 네이티브 서비스가 쌓아 둔 원문을 파싱해 거래로 저장한다. 처리한 건수를 반환.
   Future<int> processPending({void Function(int saved, int review)? onComplete}) async {
+    await prepareNotificationReview();
     final raws = await _db.query('raw_notification',
         where: 'state=0', orderBy: 'posted_at ASC');
     if (raws.isEmpty) return 0;
@@ -263,6 +268,14 @@ class Repo {
           'UPDATE raw_notification SET state=3 WHERE id=? AND state=0',
           [r['id']]);
       if (claimed == 0) continue;
+      final originTitle=r['title'] as String? ?? '';
+      if(await _hasMutedNotification(_db,r['package'] as String,originTitle)) {
+        await _db.update('raw_notification',{'state':5},where:'id=?',whereArgs:[r['id']]);
+        final rules=await _db.query('notif_mute',where:"removed_at IS NULL AND package=? AND (title='' OR title=?)",
+          whereArgs:[r['package'],originTitle],orderBy:'title DESC',limit:1);
+        if(rules.isNotEmpty)await _db.rawUpdate('UPDATE notif_mute SET blocked_count=COALESCE(blocked_count,0)+1 WHERE package=? AND title=?',[r['package'],rules.single['title']]);
+        continue;
+      }
       final received = DateTime.fromMillisecondsSinceEpoch(r['posted_at'] as int);
       final raw = joinNotification(r['title'] as String?, r['text'] as String);
       var parsed = parseNotification(raw, received);
@@ -295,7 +308,10 @@ class Repo {
               ? 'in'
               : null;
       classify(parsed, me, learned);
-      if (await _insertParsed(parsed, r['id'] as int, r['package'] as String, dir)) review++;
+      if (await _insertParsed(parsed, r['id'] as int, r['package'] as String, dir,
+        trusted:trustedNotification(r['package'] as String,originTitle,parsed.source),
+        originTitle:originTitle,notificationHash:notificationKey(r['package'] as String,originTitle,
+          r['text'] as String,r['posted_at'] as int))){review++;}
       await _db.update('raw_notification', {'state': 1},
           where: 'id=?', whereArgs: [r['id']]);
       saved++;
@@ -304,7 +320,7 @@ class Repo {
     await refreshPersonalSuggestions();
     // 추천은 거래를 바꾸지 않고 확인 목록에만 더한다.
     final newReviews = await _db.rawQuery('''SELECT raw_id FROM tx
-      WHERE deleted_at IS NULL AND (status='review' OR id IN
+      WHERE deleted_at IS NULL AND (status IN ('review','candidate') OR id IN
         (SELECT tx_id FROM learning_suggestion))''');
     review = newReviews.where((r) => savedRawIds.contains(r['raw_id'])).length;
     onComplete?.call((saved - review).clamp(0, saved), review + failed);
@@ -312,18 +328,19 @@ class Repo {
   }
 
   Future<bool> _insertParsed(
-      ParsedTx t, int rawId, String package, String? dir) async {
+      ParsedTx t, int rawId, String package, String? dir,{required bool trusted,
+        required String originTitle,required String notificationHash}) async {
     final at = t.occurredAt.millisecondsSinceEpoch;
-    var status = 'ok';
+    var status = trusted?'ok':'candidate';
     String? memo;
     // 같은 금액이 다른 앱에서 2분 안에 또 오면 중복 의심.
     final dup = await _db.rawQuery('''SELECT t.id FROM tx t JOIN raw_notification r ON r.id=t.raw_id
-      WHERE t.deleted_at IS NULL AND t.type=? AND t.amount=? AND ABS(t.occurred_at-?)<=120000
+      WHERE t.deleted_at IS NULL AND ${confirmedTxFilter('t.')} AND t.type=? AND t.amount=? AND ABS(t.occurred_at-?)<=120000
         AND r.package<>? LIMIT 1''', [t.type, t.amount, at, package]);
     if (dup.isNotEmpty) {
-      status = 'review';
+      if(trusted)status = 'review';
       memo = '중복 의심';
-    } else if (t.type == 'expense' && t.category == null) {
+    } else if (trusted && t.type == 'expense' && t.category == null) {
       status = 'review';
       memo = '미분류';
     }
@@ -338,7 +355,7 @@ class Repo {
         t.type != 'group') {
       // 직전 잔액에서 이번 금액을 더하고 뺀 값이 알림의 잔액과 다르면 그 사이 알림이 빠진 것이다.
       final prev = await _db.rawQuery(
-          'SELECT balance FROM tx WHERE account=? AND balance IS NOT NULL AND deleted_at IS NULL AND occurred_at<=? ORDER BY occurred_at DESC LIMIT 1',
+          'SELECT balance FROM tx WHERE account=? AND balance IS NOT NULL AND deleted_at IS NULL AND ${confirmedTxFilter()} AND occurred_at<=? ORDER BY occurred_at DESC LIMIT 1',
           [acctKey, at]);
       if (prev.isNotEmpty) {
         final pb = prev.first['balance'] as int;
@@ -365,6 +382,7 @@ class Repo {
       'account': await resolveAccount(t.account ?? t.card),
       'destination':otherAccount==acctKey?null:otherAccount,
       'source': t.source,
+      'notification_key':notificationHash,'notification_package':package,'notification_title':originTitle,
       'status': status,
       'raw_id': rawId,
       'balance': t.balance,
@@ -373,7 +391,7 @@ class Repo {
       'dir': dir,
       'updated_at': DateTime.now().millisecondsSinceEpoch,
     });
-    if (t.account != null || t.card != null) {
+    if (status!='candidate' && (t.account != null || t.card != null)) {
       final key = (await resolveAccount(t.account ?? t.card))!;
       if (t.type != 'group') {
         await _db.insert('account', {'key': key, 'label': key},
@@ -381,7 +399,7 @@ class Repo {
       }
     }
     await _pairTransfers(id, t, at);
-    return status == 'review';
+    return status == 'review' || status=='candidate';
   }
 
   /// 다른 계좌에서 같은 금액의 반대 거래가 5분 안에 있으면 둘 다 이체로 묶는다.
@@ -417,7 +435,7 @@ class Repo {
     final from = DateTime(month.year, month.month).millisecondsSinceEpoch;
     final to = DateTime(month.year, month.month + 1).millisecondsSinceEpoch;
     final r = await _db.query('tx',
-        where: 'occurred_at>=? AND occurred_at<? AND deleted_at IS NULL',
+        where: 'occurred_at>=? AND occurred_at<? AND deleted_at IS NULL AND ${confirmedTxFilter()}',
         whereArgs: [from, to],
         orderBy: 'occurred_at DESC');
     final rows = r.map(TxRow.fromMap).toList();
@@ -445,7 +463,9 @@ class Repo {
     final rows = await monthTx(month);
     final splits = await _splitsFor(rows.map((t) => t.id).toList());
     final personalReviewIds = (await personalSuggestions()).keys.toSet();
-    var exp = 0, inc = 0, review = 0;
+    final pending=await _db.rawQuery("SELECT COUNT(*) AS n FROM tx WHERE status='candidate' AND deleted_at IS NULL AND occurred_at>=? AND occurred_at<?",
+      [DateTime(month.year,month.month).millisecondsSinceEpoch,DateTime(month.year,month.month+1).millisecondsSinceEpoch]);
+    var exp = 0, inc = 0, review = pending.single['n'] as int;
     final cat = <String, int>{};
     for (final t in rows) {
       if (t.status == 'review' || personalReviewIds.contains(t.id)) review++;
@@ -582,12 +602,12 @@ class Repo {
         .subtract(Duration(days: days))
         .millisecondsSinceEpoch;
     return _db.delete('raw_notification',
-        where: 'posted_at<? AND state IN (1,2,4)', whereArgs: [cutoff]);
+        where: 'posted_at<? AND state IN (1,2,4,5)', whereArgs: [cutoff]);
   }
 
   Future<List<TxRow>> reviewList() async {
     final r = await _db.query('tx',
-        where: "deleted_at IS NULL AND (status='review' OR id IN (SELECT tx_id FROM learning_suggestion))",
+        where: "deleted_at IS NULL AND (status IN ('review','candidate') OR id IN (SELECT tx_id FROM learning_suggestion))",
         orderBy: 'occurred_at DESC');
     final suggestions = await personalSuggestions();
     return collapseTransfers(r.map((m) => TxRow.fromMap(m)
@@ -608,7 +628,7 @@ class Repo {
     for (final r in a) {
       final k = r['key'] as String;
       final b = await _db.rawQuery(
-          'SELECT balance, occurred_at FROM tx WHERE account=? AND balance IS NOT NULL AND deleted_at IS NULL ORDER BY occurred_at DESC LIMIT 1',
+          'SELECT balance, occurred_at FROM tx WHERE account=? AND balance IS NOT NULL AND deleted_at IS NULL AND ${confirmedTxFilter()} ORDER BY occurred_at DESC LIMIT 1',
           [k]);
       final gd = r['goal_date'] as int?;
       out.add(AccountRow(k, (r['label'] ?? k) as String,
@@ -672,6 +692,9 @@ class Repo {
     if (at != null) v['occurred_at'] = at.millisecondsSinceEpoch;
     if (note != null) v['note'] = note.trim().isEmpty ? null : note.trim();
     await _db.transaction((db) async {
+      final existing=await db.query('tx',where:'id=?',whereArgs:[id]);
+      if(existing.isEmpty)throw StateError('내역을 찾을 수 없어요.');
+      if(['candidate','rejected'].contains(existing.single['status']))throw StateError('알림 확인에서 고쳐서 맞아요를 선택해 주세요.');
       await db.update('tx', v, where: 'id=?', whereArgs: [id]);
       final current=(await db.query('tx',where:'id=?',whereArgs:[id])).first;
       if (title != null || amount != null || at != null) {
@@ -697,6 +720,7 @@ class Repo {
     await _db.transaction((db) async {
       final rows=await db.query('tx',where:'id=?',whereArgs:[id]);
       if(rows.isEmpty)return;
+      if(['candidate','rejected'].contains(rows.single['status']))throw StateError('알림 확인에서 아니에요와 이유를 선택해 주세요.');
       for(final key in [id, if(rows.first['pair_id']!=null)rows.first['pair_id'] as String]) {
         await db.delete('learning_example',where:'tx_id=?',whereArgs:[key]);
         await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[key]);

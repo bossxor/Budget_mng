@@ -14,6 +14,7 @@ import 'settlement_screens.dart';
 import 'theme.dart';
 import 'guided_entry.dart';
 import 'personal_review.dart';
+import 'notification_review.dart';
 
 String fmt(int n) {
   final s = n.abs().toString();
@@ -114,7 +115,7 @@ class TxTile extends StatelessWidget {
                     child: Text(t.route ?? t.title,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
-                if (t.status == 'review' || t.personalReview)
+                if (t.status == 'review' || t.status == 'candidate' || t.personalReview)
                   Container(
                     margin: const EdgeInsets.only(left: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -858,6 +859,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
 Future<void> showEditSheet(BuildContext context, AppState s, TxRow t,
     {bool showRecommendation = true}) async {
+  if(t.status=='candidate'){
+    final review=await s.repo.notificationReview(t.id);
+    if(!context.mounted)return;
+    if(review!=null)await Navigator.of(context).push(MaterialPageRoute(builder:(_)=>NotificationReviewScreen(s,review)));
+    return;
+  }
   if (showRecommendation) {
     final suggestion = (await s.repo.personalSuggestions())[t.id];
     if (!context.mounted) return;

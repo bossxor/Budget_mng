@@ -79,6 +79,7 @@ extension AccountTools on Repo {
     await migratePersonalApprovals();
     await _db.transaction((db) async {
       final first=(await db.query('tx',where:'id=? AND deleted_at IS NULL',whereArgs:[id])).first;
+      if(['candidate','rejected'].contains(first['status']))throw StateError('알림이 실제 거래인지 먼저 확인해 주세요.');
       if (expectedSuggestion != null) {
         final suggestion=await db.query('learning_suggestion',where:'tx_id=?',whereArgs:[id]);
         if (suggestion.isEmpty || suggestion.first['fingerprint']!=expectedSuggestion ||
@@ -137,6 +138,10 @@ extension AccountTools on Repo {
     for(final change in changes) {
       final before=jsonDecode(change['before_json'] as String) as Map<String,dynamic>;
       await db.update('tx',{...before,'updated_at':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[change['tx_id']]);
+      if(before['status']=='candidate'){
+        await db.update('notif_feedback',{'verdict':'undone','at':DateTime.now().microsecondsSinceEpoch},
+          where:"tx_id=? AND verdict IN ('yes','fixed')",whereArgs:[change['tx_id']]);
+      }
       await db.delete('learning_example',where:'tx_id=?',whereArgs:[change['tx_id']]);
       await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[change['tx_id']]);
       if(change['sample_before']!=null) {
@@ -156,7 +161,7 @@ extension AccountTools on Repo {
     return true;
   });
   Future<void> pairTransfers() async {
-    final rows=await _db.query('tx',where:"deleted_at IS NULL AND amount>0 AND pair_id IS NULL AND dir IN ('out','in') AND account IS NOT NULL",orderBy:'occurred_at');
+    final rows=await _db.query('tx',where:"deleted_at IS NULL AND ${confirmedTxFilter()} AND amount>0 AND pair_id IS NULL AND dir IN ('out','in') AND account IS NOT NULL",orderBy:'occurred_at');
     final used=<String>{};
     for(final out in rows.where((r)=>r['dir']=='out')) {
       if(used.contains(out['id'])) continue;

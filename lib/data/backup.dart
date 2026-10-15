@@ -18,6 +18,8 @@ const _tables = [
   'account_alias',
   'classification_history',
   'learning_example',
+  'notif_feedback',
+  'notif_mute',
   'rule',
   'person',
   'settlement',
@@ -208,6 +210,25 @@ Future<int> importData(Database db, Map<String, Object?> data) async {
             );
           }
         } else {
+          if(name=='notif_mute'){
+            final current=await t.query(name,where:'package=? AND title=?',whereArgs:[r['package'],r['title']]);
+            int revision(Map<String,Object?> value){
+              final created=(value['created_at'] as int?)??0,removed=(value['removed_at'] as int?)??0;
+              return created>removed?created:removed;
+            }
+            if(current.isEmpty || revision(r)>revision(current.single)){
+              await t.insert(name,r,conflictAlgorithm:ConflictAlgorithm.replace);
+            }
+            continue;
+          }
+          if(name=='notif_feedback'){
+            r['raw_id']=null;
+            final current=await t.query(name,where:'notification_key=?',whereArgs:[r['notification_key']]);
+            if(current.isEmpty || ((r['at'] as int?)??0)>((current.single['at'] as int?)??0)){
+              await t.insert(name,r,conflictAlgorithm:ConflictAlgorithm.replace);
+            }
+            continue;
+          }
           if (name == 'account' &&
               byKey[r['key']]?['bank_code'] == null &&
               r['bank_code'] != null &&

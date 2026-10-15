@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../core/notification_policy.dart';
 
 /// 월 배분 계획 한 줄: from 통장에서 to로 매월 amount를 보낸다.
 class Plan {
@@ -85,7 +86,7 @@ class PlanningRepo {
     final from = DateTime(month.year, month.month).millisecondsSinceEpoch;
     final to = DateTime(month.year, month.month + 1).millisecondsSinceEpoch;
     return _db.query('tx',
-        where: "type='transfer' AND deleted_at IS NULL AND occurred_at>=? AND occurred_at<?",
+        where: "type='transfer' AND deleted_at IS NULL AND ${confirmedTxFilter()} AND occurred_at>=? AND occurred_at<?",
         whereArgs: [from, to]);
   }
 

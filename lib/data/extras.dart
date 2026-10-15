@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import 'repo.dart';
+import '../core/notification_policy.dart';
 
 /// 태그와 검색.
 class TagRepo {
@@ -43,7 +44,7 @@ class TagRepo {
     DateTime? to,
     int limit = 300,
   }) async {
-    final where = <String>['t.deleted_at IS NULL'];
+    final where = <String>['t.deleted_at IS NULL',confirmedTxFilter('t.')];
     final args = <Object?>[];
     if (text != null && text.trim().isNotEmpty) {
       where.add(
@@ -102,7 +103,7 @@ String _csvCell(Object? v) {
 /// 엑셀에서 바로 열리는 CSV(UTF-8 BOM). month가 없으면 전체 기간.
 /// '가계부 반영'은 정산 몫·정산 입금을 반영한 금액이고, 이체와 모임통장은 0이다.
 Future<String> exportCsv(Repo repo, {DateTime? month}) async {
-  final where = ['deleted_at IS NULL'];
+  final where = ['deleted_at IS NULL',confirmedTxFilter()];
   final args = <Object?>[];
   if (month != null) {
     where.add('occurred_at>=? AND occurred_at<?');

@@ -14,16 +14,8 @@ import android.service.notification.StatusBarNotification
 class NotifService : NotificationListenerService() {
 
     companion object {
-        private val BANK_APPS = setOf(
-            "com.nonghyup.nhallonebank",
-            "com.kakaobank.channel",   // 카카오뱅크
-            "viva.republica.toss",     // 토스
-        )
-        private val SMS_APPS = setOf(
-            "com.samsung.android.messaging",
-            "com.google.android.apps.messaging",
-            "com.android.mms",
-        )
+        private val BANK_APPS = NotificationGate.BANK_APPS
+        private val SMS_APPS = NotificationGate.SMS_APPS
         private const val KAKAO = "com.kakao.talk"
         private const val SHELL = "com.android.shell" // 디버그 빌드에서만 테스트용으로 허용
         // 카카오톡은 이 제목(채팅방/채널명)의 알림만 저장한다.
@@ -66,6 +58,24 @@ class NotifService : NotificationListenerService() {
         return Regex("(?:입금|출금|결제|승인)(?:완료|액)?\\s*[:：]?\\s*[\\d,]+\\s*원|[\\d,]+\\s*원(?:이|을)?\\s*(?:입금|출금|결제|승인)").containsMatchIn(value)
     }
 
+    private fun muted(pkg: String, title: String): Boolean {
+        val ruleTitle = try {
+            SQLiteDatabase.openDatabase(getDatabasePath("budget.db").path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery("SELECT title FROM notif_mute WHERE removed_at IS NULL AND package=? AND (title='' OR title=?) ORDER BY title DESC LIMIT 1", arrayOf(pkg, title)).use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            }
+        } catch (_: Exception) { null }
+        if (ruleTitle == null) return false
+        // 건수 기록이 실패해도 이미 찾은 숨김 규칙을 무시하지 않는다.
+        try {
+            SQLiteDatabase.openDatabase(getDatabasePath("budget.db").path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                db.execSQL("UPDATE notif_mute SET blocked_count=COALESCE(blocked_count,0)+1 WHERE package=? AND title=?", arrayOf(pkg, ruleTitle))
+            }
+        } catch (_: Exception) { }
+        return true
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName || (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
         val pkg = sbn.packageName
@@ -79,10 +89,12 @@ class NotifService : NotificationListenerService() {
         if (text.isBlank()) return
 
         val whole = "$title\n$text"
+        val extrasPackages = extraPackages()
+        if (!NotificationGate.isProtected(pkg, title, extrasPackages) && muted(pkg, title)) return
         val financial = FINANCE_WORDS.containsMatchIn(whole) && !AD_WORDS.containsMatchIn(whole)
         val allowed = when (pkg) {
             in BANK_APPS, in SMS_APPS -> financial
-            in extraPackages() -> financial
+            in extrasPackages -> financial
             KAKAO -> title in KAKAO_TITLES && !AD_WORDS.containsMatchIn(whole)
             SHELL -> debuggable
             else -> looksLikeTransaction(whole)
