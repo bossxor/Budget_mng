@@ -50,6 +50,8 @@ class AppState extends ChangeNotifier {
   String font = 'noto';
   double textScale = 1.0;
   List<TxRow> rows = [];
+  Map<String, PersonalSuggestion> classificationSuggestions = {};
+  int personalLearnedCount = 0;
   MonthSummary summary = MonthSummary(0, 0, {}, 0);
   List<AccountRow> accounts = [];
   bool listenerOn = true;
@@ -102,7 +104,11 @@ class AppState extends ChangeNotifier {
       try { await _channel.invokeMethod('ingestResult', {'saved': saved, 'review': review}); } catch (_) {}
     }
     await repo.pairTransfers();
+    await repo.refreshPersonalSuggestions();
+    classificationSuggestions = await repo.personalSuggestions();
+    personalLearnedCount = await repo.personalExampleCount();
     rows = await repo.monthTx(month);
+    for (final row in rows) { row.personalReview = classificationSuggestions.containsKey(row.id); }
     summary = await repo.summary(month);
     accounts = await repo.accounts();
     rawTotal = await repo.rawCount();

@@ -38,7 +38,7 @@ class _GuidedEntryState extends State<_GuidedEntry> {
     initialValue:value, isExpanded:true, decoration:InputDecoration(labelText:label,filled:false,border:InputBorder.none,enabledBorder:InputBorder.none,focusedBorder:InputBorder.none),
     items:[if(!receiving) const DropdownMenuItem(value:'현금',child:Text('현금')),
       for(final a in widget.s.accounts.where((a)=>(!receiving || a.key!=account) && a.key!='현금'))
-        DropdownMenuItem(value:a.key,child:Text(a.label,overflow:TextOverflow.ellipsis))],
+        DropdownMenuItem(value:a.key,child:Text(a.selectionLabel,overflow:TextOverflow.ellipsis))],
     onChanged:saving?null:change);
   @override Widget build(BuildContext context){
     final cs=Theme.of(context).colorScheme;

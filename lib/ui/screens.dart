@@ -13,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 import 'settlement_screens.dart';
 import 'theme.dart';
 import 'guided_entry.dart';
+import 'personal_review.dart';
 
 String fmt(int n) {
   final s = n.abs().toString();
@@ -113,7 +114,7 @@ class TxTile extends StatelessWidget {
                     child: Text(t.route ?? t.title,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
-                if (t.status == 'review')
+                if (t.status == 'review' || t.personalReview)
                   Container(
                     margin: const EdgeInsets.only(left: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -855,8 +856,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 }
 
-Future<void> showEditSheet(BuildContext context, AppState s, TxRow t) {
-  return showModalBottomSheet(
+Future<void> showEditSheet(BuildContext context, AppState s, TxRow t,
+    {bool showRecommendation = true}) async {
+  if (showRecommendation) {
+    final suggestion = (await s.repo.personalSuggestions())[t.id];
+    if (!context.mounted) return;
+    if (suggestion != null) {
+      await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => PersonalReviewScreen(
+        s,t,suggestion,amountLabel:'${fmt(t.amount)}원',
+        onDetails:()=>showEditSheet(context,s,t,showRecommendation:false))));
+      return;
+    }
+  }
+  if (!context.mounted) return;
+  await showModalBottomSheet(
     context: context,
     useSafeArea: true,
     showDragHandle: true,

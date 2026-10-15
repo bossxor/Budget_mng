@@ -17,6 +17,7 @@ const _tables = [
   'account',
   'account_alias',
   'classification_history',
+  'learning_example',
   'rule',
   'person',
   'settlement',
@@ -31,10 +32,19 @@ const _tables = [
   'group_preset',
   'budget',
 ];
-const _skipKv = {'lock_hash', 'lock_salt', 'lock_bio', 'lock_delay', 'last_backup_at'};
+const _skipKv = {
+  'lock_hash',
+  'lock_salt',
+  'lock_bio',
+  'lock_delay',
+  'last_backup_at',
+};
 
 Future<Map<String, Object?>> exportData(Database db) async {
-  final out = <String, Object?>{'version': 1, 'exported_at': DateTime.now().toIso8601String()};
+  final out = <String, Object?>{
+    'version': 1,
+    'exported_at': DateTime.now().toIso8601String(),
+  };
   for (final t in _tables) {
     out[t] = await db.query(t);
   }
@@ -43,7 +53,10 @@ Future<Map<String, Object?>> exportData(Database db) async {
   return out;
 }
 
-Future<Uint8List> encryptBackup(Map<String, Object?> data, String passphrase) async {
+Future<Uint8List> encryptBackup(
+  Map<String, Object?> data,
+  String passphrase,
+) async {
   final plain = GZipCodec().encode(utf8.encode(jsonEncode(data)));
   final rnd = SecretKeyData.random(length: 28).bytes;
   final salt = rnd.sublist(0, 16), nonce = rnd.sublist(16);
@@ -52,7 +65,11 @@ Future<Uint8List> encryptBackup(Map<String, Object?> data, String passphrase) as
     iterations: _iterations,
     bits: 256,
   ).deriveKeyFromPassword(password: passphrase, nonce: salt);
-  final box = await AesGcm.with256bits().encrypt(plain, secretKey: key, nonce: nonce);
+  final box = await AesGcm.with256bits().encrypt(
+    plain,
+    secretKey: key,
+    nonce: nonce,
+  );
   return Uint8List.fromList([
     ...utf8.encode(_magic),
     ...salt,
@@ -69,7 +86,10 @@ class BackupError implements Exception {
   String toString() => message;
 }
 
-Future<Map<String, Object?>> decryptBackup(Uint8List file, String passphrase) async {
+Future<Map<String, Object?>> decryptBackup(
+  Uint8List file,
+  String passphrase,
+) async {
   final head = utf8.encode(_magic).length;
   if (file.length < head + 16 + 12 + 16 ||
       utf8.decode(file.sublist(0, head), allowMalformed: true) != _magic) {
@@ -89,7 +109,8 @@ Future<Map<String, Object?>> decryptBackup(Uint8List file, String passphrase) as
       SecretBox(cipher, nonce: nonce, mac: Mac(mac)),
       secretKey: key,
     );
-    return jsonDecode(utf8.decode(GZipCodec().decode(plain))) as Map<String, Object?>;
+    return jsonDecode(utf8.decode(GZipCodec().decode(plain)))
+        as Map<String, Object?>;
   } on SecretBoxAuthenticationError {
     throw BackupError('암호가 맞지 않거나 파일이 손상됐어요');
   }
@@ -100,24 +121,113 @@ Future<Map<String, Object?>> decryptBackup(Uint8List file, String passphrase) as
 Future<int> importData(Database db, Map<String, Object?> data) async {
   var added = 0;
   await db.transaction((t) async {
+    // 다른 기기에서 같은 은행 계좌를 새 key로 등록한 백업도 하나의 통장으로 합친다.
+    final existingAccounts = await t.query('account');
+    final byKey = {for (final row in existingAccounts) row['key']: row};
+    final identities = <String, String>{
+      for (final row in existingAccounts)
+        if (row['bank_code'] != null && row['account_number'] != null)
+          '${row['bank_code']}:${row['account_number']}': row['key'] as String,
+    };
+    final accountMap = <String, String>{};
+    for (final row
+        in (data['account'] as List?)?.cast<Map<String, Object?>>() ??
+            const []) {
+      if (row['bank_code'] == null || row['account_number'] == null) continue;
+      final key = row['key'] as String;
+      final identity = '${row['bank_code']}:${row['account_number']}';
+      final same = identities[identity];
+      if (same != null && same != key) {
+        accountMap[key] = same;
+        continue;
+      }
+      final current = byKey[key];
+      if (current != null &&
+          current['bank_code'] != null &&
+          (current['bank_code'] != row['bank_code'] ||
+              current['account_number'] != row['account_number'])) {
+        throw BackupError('서로 다른 계좌 정보가 충돌해 복원을 중단했어요. 기존 데이터는 유지됩니다.');
+      }
+      identities[identity] = key;
+    }
+    Map<String, Object?> remapSample(Map<String, Object?> sample) {
+      if (sample['input_json'] is! String || accountMap.isEmpty) return sample;
+      final input =
+          jsonDecode(sample['input_json'] as String) as Map<String, dynamic>;
+      for (final field in ['account', 'destination']) {
+        input[field] = accountMap[input[field]] ?? input[field];
+      }
+      return {...sample, 'input_json': jsonEncode(input)};
+    }
+
     for (final name in _tables) {
-      final rows = (data[name] as List?)?.cast<Map<String, Object?>>() ?? const [];
-      for (final r in rows) {
-        if (name == 'tx') {
-          final cur = await t.query('tx', where: 'id=?', whereArgs: [r['id']]);
+      final rows =
+          (data[name] as List?)?.cast<Map<String, Object?>>() ?? const [];
+      for (final original in rows) {
+        var r = Map<String, Object?>.from(original);
+        final fields = switch (name) {
+          'tx' => ['account', 'destination'],
+          'account' => ['key', 'pays_from'],
+          'account_alias' => ['canonical'],
+          'allocation' => ['from_key', 'to_key'],
+          'gap_alert' => ['account'],
+          _ => <String>[],
+        };
+        for (final field in fields) {
+          if (r.containsKey(field)) r[field] = accountMap[r[field]] ?? r[field];
+        }
+        if (name == 'account_alias' && r['alias'] == r['canonical']) continue;
+        if (name == 'learning_example') r = remapSample(r);
+        if (name == 'classification_history') {
+          for (final field in ['sample_before', 'sample_after']) {
+            if (r[field] is String) {
+              r[field] = jsonEncode(
+                remapSample(
+                  jsonDecode(r[field] as String) as Map<String, dynamic>,
+                ),
+              );
+            }
+          }
+        }
+        if (name == 'tx' || name == 'learning_example') {
+          final idColumn = name == 'tx' ? 'id' : 'tx_id';
+          final cur = await t.query(
+            name,
+            where: '$idColumn=?',
+            whereArgs: [r[idColumn]],
+          );
           if (cur.isEmpty) {
-            await t.insert('tx', r);
-            added++;
+            await t.insert(name, r);
+            if (name == 'tx') added++;
           } else if (((r['updated_at'] as int?) ?? 0) >
               ((cur.first['updated_at'] as int?) ?? 0)) {
-            await t.insert('tx', r, conflictAlgorithm: ConflictAlgorithm.replace);
+            await t.insert(
+              name,
+              r,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
           }
         } else {
+          if (name == 'account' &&
+              byKey[r['key']]?['bank_code'] == null &&
+              r['bank_code'] != null &&
+              byKey.containsKey(r['key'])) {
+            await t.update(
+              'account',
+              {
+                'bank_code': r['bank_code'],
+                'account_number': r['account_number'],
+              },
+              where: 'key=?',
+              whereArgs: [r['key']],
+            );
+          }
           await t.insert(name, r, conflictAlgorithm: ConflictAlgorithm.ignore);
         }
       }
     }
-    for (final r in (data['kv'] as List?)?.cast<Map<String, Object?>>() ?? const []) {
+    for (final r
+        in (data['kv'] as List?)?.cast<Map<String, Object?>>() ?? const []) {
       // 설정은 이 기기 값을 우선한다.
       await t.insert('kv', r, conflictAlgorithm: ConflictAlgorithm.ignore);
     }

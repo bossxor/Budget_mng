@@ -5,6 +5,7 @@ import '../data/planning_repo.dart';
 import '../data/repo.dart';
 import 'screens.dart';
 import 'theme.dart';
+import 'account_registration.dart';
 
 bool _looksLikeCard(String key) => RegExp(r'^[가-힣A-Za-z]+\d{4}$').hasMatch(key);
 
@@ -86,8 +87,10 @@ class AccountsScreen extends StatelessWidget {
           ),
         ),
       Padding(padding: const EdgeInsets.only(bottom: 12),
-        child: FilledButton.icon(onPressed: () => _addAccount(context, s),
-          icon: const Icon(Icons.add_rounded), label: const Text('내 통장 추가'))),
+        child: FilledButton.icon(onPressed: () => showAccountRegistration(context, s),
+          icon: const Icon(Icons.playlist_add_rounded), label: const Text('통장 모아 등록'))),
+      Align(alignment:Alignment.centerRight,child:TextButton(
+        onPressed:()=>_addAccount(context,s),child:const Text('이름만 간단히 추가'))),
       _PlanCard(s, labelOf),
       if (s.accounts.isEmpty)
         const Padding(
@@ -138,6 +141,8 @@ class _AccountCard extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                   Text(roles[a.role] ?? '미지정',
                       style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+                  if(a.maskedIdentity.isNotEmpty)Text(a.maskedIdentity,
+                    style:TextStyle(color:cs.onSurfaceVariant,fontSize:12)),
                 ]),
               ),
               Text(a.balance == null ? '-' : '${fmt(bal)}원',
@@ -290,7 +295,7 @@ void _addPlan(BuildContext context, AppState s, Map<String, String> labelOf) {
             hint: const Text('통장을 먼저 등록하세요'),
             items: [
               for (final a in keys)
-                DropdownMenuItem(value: a.key, child: Text(a.label)),
+                DropdownMenuItem(value: a.key, child: Text(a.selectionLabel,overflow:TextOverflow.ellipsis)),
             ],
             onChanged: (v) => setS(() { from = v; if (to == v) to = null; }),
           ),
@@ -302,7 +307,7 @@ void _addPlan(BuildContext context, AppState s, Map<String, String> labelOf) {
             hint: const Text('선택하거나 아래에 직접 입력'),
             items: [
               for (final a in keys.where((a) => a.key != from))
-                DropdownMenuItem(value: a.key, child: Text(a.label)),
+                DropdownMenuItem(value: a.key, child: Text(a.selectionLabel,overflow:TextOverflow.ellipsis)),
             ],
             onChanged: (v) => setS(() => to = v),
           ),
@@ -386,9 +391,11 @@ void _editAccount(BuildContext context, AppState s, AccountRow a,
       builder: (ctx, setS) => SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(20, 0, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + MediaQuery.of(ctx).padding.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(a.key, style: Theme.of(ctx).textTheme.bodySmall),
+          Text(a.maskedIdentity.isEmpty?a.label:a.maskedIdentity, style: Theme.of(ctx).textTheme.bodySmall),
           const SizedBox(height: 8),
           TextField(controller: name, decoration: const InputDecoration(labelText: '이름')),
+          if(!isCard)TextButton.icon(onPressed:(){Navigator.pop(ctx);showAccountRegistration(context,s,account:a);},
+            icon:const Icon(Icons.account_balance_outlined,size:18),label:const Text('은행·계좌번호 등록/수정')),
           const SizedBox(height:8),
           OutlinedButton.icon(onPressed: () { Navigator.pop(ctx); _accountTools(context,s,a); },
             icon:const Icon(Icons.link_rounded),label:const Text('계좌 연결·잔액 보정')),
@@ -413,7 +420,7 @@ void _editAccount(BuildContext context, AppState s, AccountRow a,
               hint: const Text('선택'),
               items: [
                 for (final b in bankKeys)
-                  DropdownMenuItem(value: b.key, child: Text(b.label)),
+                  DropdownMenuItem(value: b.key, child: Text(b.selectionLabel,overflow:TextOverflow.ellipsis)),
               ],
               onChanged: (v) => setS(() => paysFrom = v),
             ),
@@ -541,7 +548,7 @@ Future<void> _accountTools(BuildContext context, AppState s, AccountRow account)
           const Text('같은 실제 통장이 서로 다른 이름으로 표시될 때 연결하세요. 기존 거래·배분 계획을 선택한 통장으로 모읍니다.'),
           const SizedBox(height:12),
           DropdownButtonFormField<String>(initialValue:target,isExpanded:true,decoration:const InputDecoration(labelText:'연결할 내 통장'),
-            items:[for(final a in candidates)DropdownMenuItem(value:a.key,child:Text(a.label))],onChanged:busy?null:(v)=>setS(()=>target=v)),
+            items:[for(final a in candidates)DropdownMenuItem(value:a.key,child:Text(a.selectionLabel,overflow:TextOverflow.ellipsis))],onChanged:busy?null:(v)=>setS(()=>target=v)),
           const SizedBox(height:8),
           OutlinedButton(onPressed:busy||target==null?null:()async{
             setS(()=>busy=true);

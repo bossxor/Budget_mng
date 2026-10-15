@@ -33,7 +33,7 @@ extension AccountTools on Repo {
   Future<String?> resolveAccount(String? key) async {
     if (key == null) return null;
     final aliases = await _db.query('account_alias', where: 'alias=?', whereArgs: [key]);
-    return aliases.isEmpty ? key : aliases.first['canonical'] as String;
+    return aliases.isEmpty ? (await _registeredAccount(key))??key : aliases.first['canonical'] as String;
   }
 
   Future<void> linkAccount(String source, String target) async {
@@ -45,6 +45,14 @@ extension AccountTools on Repo {
       }
       final sourceRow=(await db.query('account',where:'key=?',whereArgs:[source])).first;
       final targetRow=(await db.query('account',where:'key=?',whereArgs:[dest])).first;
+      if(sourceRow['bank_code']!=null && sourceRow['account_number']!=null) {
+        if(targetRow['bank_code']!=null &&
+          (targetRow['bank_code']!=sourceRow['bank_code'] || targetRow['account_number']!=sourceRow['account_number'])) {
+          throw ArgumentError('은행·계좌번호가 다른 통장은 연결할 수 없어요.');
+        }
+        await db.update('account',{'bank_code':null,'account_number':null},where:'key=?',whereArgs:[source]);
+        await db.update('account',{'bank_code':sourceRow['bank_code'],'account_number':sourceRow['account_number']},where:'key=?',whereArgs:[dest]);
+      }
       if ((sourceRow['manual_balance_at'] as int? ?? -1) > (targetRow['manual_balance_at'] as int? ?? -1)) {
         await db.update('account',{'manual_balance':sourceRow['manual_balance'],'manual_balance_at':sourceRow['manual_balance_at']},where:'key=?',whereArgs:[dest]);
       }
@@ -65,9 +73,22 @@ extension AccountTools on Repo {
     await _db.update('account', {'manual_balance': balance, 'manual_balance_at': balance == null ? null : at.millisecondsSinceEpoch}, where: 'key=?', whereArgs: [key]);
   }
 
-  Future<void> classifyTx(String id, {String? type, String? category}) async {
+  Future<void> classifyTx(String id, {String? type, String? category,
+      String? expectedSuggestion, String? expectedRecommendedType,
+      String? expectedRecommendedCategory}) async {
+    await migratePersonalApprovals();
     await _db.transaction((db) async {
       final first=(await db.query('tx',where:'id=? AND deleted_at IS NULL',whereArgs:[id])).first;
+      if (expectedSuggestion != null) {
+        final suggestion=await db.query('learning_suggestion',where:'tx_id=?',whereArgs:[id]);
+        if (suggestion.isEmpty || suggestion.first['fingerprint']!=expectedSuggestion ||
+            _learningFingerprint(first)!=expectedSuggestion ||
+            (expectedRecommendedType!=null &&
+              (suggestion.first['type']!=expectedRecommendedType ||
+                suggestion.first['category']!=expectedRecommendedCategory))) {
+          throw StateError('거래가 변경되었어요. 최신 추천을 다시 확인해 주세요.');
+        }
+      }
       if(type!=null && !['expense','income','transfer','group'].contains(type)) throw ArgumentError('거래 종류를 확인하세요');
       if(first['pair_id']!=null && type!=null && type!='transfer') throw ArgumentError('연결된 이체의 목적만 변경할 수 있어요');
       final ids=[id, if(first['pair_id']!=null && category!=null)first['pair_id'] as String];
@@ -84,7 +105,13 @@ extension AccountTools on Repo {
         final rawKeyword=(current['merchant']??current['counterparty']) as String?;
         final keyword=category!=null && after['type']=='expense' && rawKeyword!=null && !['(알 수 없음)','출금·결제','입금','현금'].contains(rawKeyword)?rawKeyword:null;
         final rules=keyword==null?<Map<String,Object?>>[]:await db.query('rule',where:'keyword=?',whereArgs:[keyword]);
-        await db.insert('classification_history',{'id':_newId(),'batch':batch,'tx_id':key,'before_json':jsonEncode(before),'after_json':jsonEncode(after),'keyword':keyword,'rule_before':rules.isEmpty?null:rules.first['category'],'rule_after':keyword==null?null:category,'created_at':DateTime.now().microsecondsSinceEpoch});
+        final previousSamples=await db.query('learning_example',where:'tx_id=?',whereArgs:[key]);
+        await db.delete('learning_example',where:'tx_id=?',whereArgs:[key]);
+        final sample=await _rememberApproval(db,{...current,...after});
+        await db.insert('classification_history',{'id':_newId(),'batch':batch,'tx_id':key,'before_json':jsonEncode(before),'after_json':jsonEncode(after),'keyword':keyword,'rule_before':rules.isEmpty?null:rules.first['category'],'rule_after':keyword==null?null:category,'created_at':DateTime.now().microsecondsSinceEpoch,
+          'sample_before':previousSamples.isEmpty?null:jsonEncode(previousSamples.first),
+          'sample_after':sample==null?null:jsonEncode(sample)});
+        await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[key]);
         await db.update('tx',{...after,'updated_at':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[key]);
         if(keyword!=null) await db.insert('rule',{'keyword':keyword,'category':category},conflictAlgorithm:ConflictAlgorithm.replace);
       }
@@ -102,10 +129,20 @@ extension AccountTools on Repo {
       final before=jsonDecode(change['before_json'] as String) as Map<String,dynamic>;
       if (current.isNotEmpty && current.first['pair_id'] != null && before['type'] != 'transfer') return false;
       if(current.isEmpty || after.entries.any((e)=>current.first[e.key]!=e.value)) return false;
+      if(change['sample_after']!=null) {
+        final sample=await db.query('learning_example',where:'tx_id=?',whereArgs:[change['tx_id']]);
+        if(sample.isEmpty || jsonEncode(sample.first)!=change['sample_after']) return false;
+      }
     }
     for(final change in changes) {
       final before=jsonDecode(change['before_json'] as String) as Map<String,dynamic>;
       await db.update('tx',{...before,'updated_at':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[change['tx_id']]);
+      await db.delete('learning_example',where:'tx_id=?',whereArgs:[change['tx_id']]);
+      await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[change['tx_id']]);
+      if(change['sample_before']!=null) {
+        await db.insert('learning_example',jsonDecode(change['sample_before'] as String) as Map<String,dynamic>,
+          conflictAlgorithm:ConflictAlgorithm.replace);
+      }
       if(change['keyword']!=null) {
         final newer=await db.query('classification_history',where:'keyword=? AND undone=0 AND created_at>?',whereArgs:[change['keyword'],change['created_at']]);
         final rule=await db.query('rule',where:'keyword=?',whereArgs:[change['keyword']]);
@@ -124,6 +161,8 @@ extension AccountTools on Repo {
     for(final out in rows.where((r)=>r['dir']=='out')) {
       if(used.contains(out['id'])) continue;
       final candidates=rows.where((i)=>i['dir']=='in' && i['account']!=out['account'] && i['amount']==out['amount'] && !used.contains(i['id']) && ((i['occurred_at'] as int)-(out['occurred_at'] as int)).abs()<=300000 &&
+        (out['destination']==null || out['destination']==i['account']) &&
+        (i['destination']==null || i['destination']==out['account']) &&
         ((i['type']=='transfer' && out['type']=='transfer') || i['counterparty']==out['account'] || out['counterparty']==i['account'])).toList();
       if(candidates.length!=1) continue;
       final incoming=candidates.single;
@@ -131,6 +170,9 @@ extension AccountTools on Repo {
         final fresh = await db.query('tx', where: 'id IN (?,?) AND pair_id IS NULL AND deleted_at IS NULL', whereArgs: [out['id'], incoming['id']]);
         if (fresh.length != 2) return;
         for(final (a,b) in [(out,incoming),(incoming,out)]) {
+          // 연결로 거래 구조가 바뀌었으므로 이전 구조에서 승인한 예제는 다시 확인한다.
+          await db.delete('learning_example',where:'tx_id=?',whereArgs:[a['id']]);
+          await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[a['id']]);
           await db.update('tx',{'type':'transfer','pair_id':b['id'],'destination':b['account']},where:'id=? AND pair_id IS NULL',whereArgs:[a['id']]);
         }
       });
@@ -152,6 +194,7 @@ extension AccountTools on Repo {
       final id=_newId(), other=kind=='transfer'?_newId():null;
       await db.insert('tx',{'id':id,'type':kind,'amount':amount,'merchant':title,'category':category,'occurred_at':at.millisecondsSinceEpoch,'account':from,'destination':to,'counterparty':to,'pair_id':other,'dir':kind=='income'?'in':'out','note':note,'source':'manual','status':'ok','updated_at':DateTime.now().millisecondsSinceEpoch});
       if(other!=null) await db.insert('tx',{'id':other,'type':'transfer','amount':amount,'merchant':title,'category':category,'occurred_at':at.millisecondsSinceEpoch,'account':to,'destination':from,'counterparty':from,'pair_id':id,'dir':'in','note':note,'source':'manual','status':'ok','updated_at':DateTime.now().millisecondsSinceEpoch});
+      await _rememberApproval(db,(await db.query('tx',where:'id=?',whereArgs:[id])).single);
     });
   }
 }

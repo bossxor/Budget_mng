@@ -1,4 +1,5 @@
 import 'parsers.dart';
+import 'bank_accounts.dart';
 
 /// 본인 판정에 쓰는 사용자 입력값 (온보딩/설정에서 등록).
 class Identity {
@@ -25,6 +26,8 @@ class Identity {
   /// 상대가 내 계좌/본인인지.
   bool isOwn(String? s) {
     if (s == null || s.isEmpty) return false;
+    final reference=parseAccountReference(s);
+    if(reference!=null && accountAliases.any((a)=>parseAccountReference(a)==reference))return true;
     return s.startsWith('내 ') ||
         RegExp(r'^.+\(\d{4}\)$').hasMatch(s) || // 카카오뱅크 내 상품
         accountAliases.contains(s) ||
@@ -66,7 +69,9 @@ String? categorize(String? name, [Map<String, String> learned = const {}]) {
 ParsedTx classify(ParsedTx t, Identity me,
     [Map<String, String> learned = const {}]) {
   if (t.type == 'income' || t.type == 'expense') {
-    if (me.isOwn(t.counterparty)) t.type = 'transfer';
+    final explicitParty=t.counterparty??
+      (t.source=='auto' && parseAccountReference(t.merchant??'')!=null?t.merchant:null);
+    if (me.isOwn(explicitParty)) t.type = 'transfer';
     // 카드대금은 카드 결제와 이중 집계되므로 이체 처리.
     if (t.type != 'transfer' &&
         t.merchant == null &&

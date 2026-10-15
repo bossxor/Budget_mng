@@ -4,12 +4,16 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core/classify.dart';
 import '../core/parsers.dart';
+import '../core/personal_classifier.dart';
+import '../core/bank_accounts.dart';
 import 'budget_repo.dart';
 import 'extras.dart';
 import 'planning_repo.dart';
 import 'settlement_repo.dart';
 
 part 'account_tools.dart';
+part 'learning_tools.dart';
+part 'account_registry.dart';
 
 class TxRow {
   TxRow(this.id, this.type, this.amount, this.title, this.category,
@@ -25,6 +29,7 @@ class TxRow {
   final String? memo;
   String? pairId, destination, route, direction;
   String? note; // 사용자 메모
+  bool personalReview = false;
 
   /// 정산에 묶인 지출이면 내 몫, 아니면 null.
   int? mine;
@@ -75,7 +80,12 @@ class SourceStatus {
 
 class AccountRow {
   AccountRow(this.key, this.label, this.role, this.balance,
-      {this.monthlyTarget, this.goalAmount, this.goalDate, this.paysFrom, this.balanceAt, this.manualBalance = false});
+      {this.monthlyTarget, this.goalAmount, this.goalDate, this.paysFrom, this.balanceAt,
+       this.manualBalance = false,this.bankCode,this.accountNumber});
+  final String? bankCode,accountNumber;
+  String get maskedIdentity => [if(bankCode!=null)bankNames[bankCode]??bankCode!,
+    if(accountNumber!=null)maskedAccountNumber(accountNumber)].join(' · ');
+  String get selectionLabel => maskedIdentity.isEmpty?label:'$label · $maskedIdentity';
   final String key;
   final String label;
   final String role;
@@ -113,6 +123,8 @@ class Repo {
         tags = TagRepo(_db),
         budget = BudgetRepo(_db);
   final Database _db;
+  PersonalClassifier? _personalModel;
+  String? _personalSignature;
   final SettlementRepo settlements;
   final PlanningRepo planning;
   final TagRepo tags;
@@ -182,6 +194,8 @@ class Repo {
     await BudgetRepo.schema(d);
     await SettlementRepo.schema(d);
     await ensureAccountTools(d);
+    await ensurePersonalLearning(d);
+    await ensureAccountRegistry(d);
   }
 
   // ---- kv ----
@@ -203,6 +217,10 @@ class Repo {
     final keys = (await _db.query('account', columns: ['key']))
         .map((r) => r['key'] as String)
         .toSet();
+    for(final row in await _db.query('account',where:'bank_code IS NOT NULL AND account_number IS NOT NULL')) {
+      final bank=bankNames[row['bank_code']];
+      if(bank!=null)keys.add('$bank ${row['account_number']}');
+    }
     return Identity(names: names, accountAliases: keys);
   }
 
@@ -237,6 +255,7 @@ class Repo {
     final learned = await learnedRules();
     final extra = ((await getKv('extra_packages')) ?? '').split(',');
     var saved = 0;
+    final savedRawIds = <Object?>{};
     var review = 0, failed = 0;
     for (final r in raws) {
       // 앱과 백그라운드 엔진이 동시에 돌아도 같은 알림을 두 번 처리하지 않게 먼저 선점한다.
@@ -280,8 +299,15 @@ class Repo {
       await _db.update('raw_notification', {'state': 1},
           where: 'id=?', whereArgs: [r['id']]);
       saved++;
+      savedRawIds.add(r['id']);
     }
-    onComplete?.call(saved - review, review + failed);
+    await refreshPersonalSuggestions();
+    // 추천은 거래를 바꾸지 않고 확인 목록에만 더한다.
+    final newReviews = await _db.rawQuery('''SELECT raw_id FROM tx
+      WHERE deleted_at IS NULL AND (status='review' OR id IN
+        (SELECT tx_id FROM learning_suggestion))''');
+    review = newReviews.where((r) => savedRawIds.contains(r['raw_id'])).length;
+    onComplete?.call((saved - review).clamp(0, saved), review + failed);
     return saved;
   }
 
@@ -303,6 +329,8 @@ class Repo {
     }
     final id = _newId();
     final acctKey = await resolveAccount(t.account ?? t.card);
+    final otherAccount=t.type=='transfer'?
+      await _registeredAccount(t.counterparty??t.merchant??''):null;
     if (status == 'ok' &&
         t.balance != null &&
         acctKey != null &&
@@ -335,6 +363,7 @@ class Repo {
       'category': t.category,
       'occurred_at': at,
       'account': await resolveAccount(t.account ?? t.card),
+      'destination':otherAccount==acctKey?null:otherAccount,
       'source': t.source,
       'status': status,
       'raw_id': rawId,
@@ -415,10 +444,11 @@ class Repo {
   Future<MonthSummary> summary(DateTime month) async {
     final rows = await monthTx(month);
     final splits = await _splitsFor(rows.map((t) => t.id).toList());
+    final personalReviewIds = (await personalSuggestions()).keys.toSet();
     var exp = 0, inc = 0, review = 0;
     final cat = <String, int>{};
     for (final t in rows) {
-      if (t.status == 'review') review++;
+      if (t.status == 'review' || personalReviewIds.contains(t.id)) review++;
       if (t.type == 'expense') {
         exp += t.effective;
         final sp = splits[t.id];
@@ -557,9 +587,11 @@ class Repo {
 
   Future<List<TxRow>> reviewList() async {
     final r = await _db.query('tx',
-        where: "status='review' AND deleted_at IS NULL",
+        where: "deleted_at IS NULL AND (status='review' OR id IN (SELECT tx_id FROM learning_suggestion))",
         orderBy: 'occurred_at DESC');
-    return r.map(TxRow.fromMap).toList();
+    final suggestions = await personalSuggestions();
+    return collapseTransfers(r.map((m) => TxRow.fromMap(m)
+      ..personalReview = suggestions.containsKey(m['id'])).toList());
   }
 
   Future<List<Map<String, Object?>>> failedRaw() => _db.query('raw_notification',
@@ -591,7 +623,8 @@ class Repo {
           goalAmount: r['goal_amount'] as int?,
           goalDate:
               gd == null ? null : DateTime.fromMillisecondsSinceEpoch(gd),
-          paysFrom: r['pays_from'] as String?));
+          paysFrom: r['pays_from'] as String?,bankCode:r['bank_code'] as String?,
+          accountNumber:r['account_number'] as String?));
     }
     return out;
   }
@@ -640,6 +673,13 @@ class Repo {
     if (note != null) v['note'] = note.trim().isEmpty ? null : note.trim();
     await _db.transaction((db) async {
       await db.update('tx', v, where: 'id=?', whereArgs: [id]);
+      final current=(await db.query('tx',where:'id=?',whereArgs:[id])).first;
+      if (title != null || amount != null || at != null) {
+        for (final key in [id,if(current['pair_id']!=null)current['pair_id'] as String]) {
+          await db.delete('learning_example',where:'tx_id=?',whereArgs:[key]);
+          await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[key]);
+        }
+      }
       if (amount != null || at != null) {
         final row = (await db.query('tx', where: 'id=?', whereArgs: [id])).first;
         if (row['pair_id'] != null) { await db.update('tx', {
@@ -651,14 +691,15 @@ class Repo {
     });
   }
 
-  Future<void> confirm(String id) => _db.update(
-      'tx', {'status': 'ok', 'memo': null}, where: 'id=?', whereArgs: [id]);
+  Future<void> confirm(String id) => classifyTx(id);
 
   Future<void> delete(String id) async {
     await _db.transaction((db) async {
       final rows=await db.query('tx',where:'id=?',whereArgs:[id]);
       if(rows.isEmpty)return;
       for(final key in [id, if(rows.first['pair_id']!=null)rows.first['pair_id'] as String]) {
+        await db.delete('learning_example',where:'tx_id=?',whereArgs:[key]);
+        await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[key]);
         await db.update('tx',{'deleted_at':DateTime.now().millisecondsSinceEpoch,'updated_at':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[key]);
       }
     });

@@ -335,6 +335,11 @@ class SettingsScreen extends StatelessWidget {
         ),
         _ScaleRow(s),
       ]),
+      _Group('개인화 학습', [
+        _Row(icon: Icons.auto_awesome_rounded, color: Dsn.blue,
+          title:'분류 도우미',value:'승인 자료 ${s.personalLearnedCount}건 · 추천 후 확인',
+          onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>ReviewScreen(s)))),
+      ]),
       _Group('예산', [
         _Row(
           icon: Icons.savings_rounded,
