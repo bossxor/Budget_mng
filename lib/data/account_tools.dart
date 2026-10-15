@@ -15,11 +15,11 @@ Future<void> ensureAccountTools(Database db) async {
   if (!historyColumns.any((c) => c['name']=='batch')) await addColumnSafely(db,'classification_history','batch TEXT');
   for (final column in ['pair_id TEXT', 'destination TEXT']) {
     final columns = await db.rawQuery('PRAGMA table_info(tx)');
-    if (!columns.any((c) => c['name'] == column.split(' ').first)) await db.execute('ALTER TABLE tx ADD COLUMN $column');
+    if (!columns.any((c) => c['name'] == column.split(' ').first)) await addColumnSafely(db,'tx',column);
   }
   for (final column in ['manual_balance INTEGER', 'manual_balance_at INTEGER']) {
     final columns = await db.rawQuery('PRAGMA table_info(account)');
-    if (!columns.any((c) => c['name'] == column.split(' ').first)) await db.execute('ALTER TABLE account ADD COLUMN $column');
+    if (!columns.any((c) => c['name'] == column.split(' ').first)) await addColumnSafely(db,'account',column);
   }
 }
 
