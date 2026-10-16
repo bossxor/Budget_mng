@@ -321,11 +321,13 @@ extension NotificationFeedback on Repo {
     String? category,
     String? destination,
     String? reason,
+    String? enableAutoPatternKey,
   }) async {
     await migratePersonalApprovals();
     await _db.transaction((db) async {
       final row = await _checkedNotification(db, review);
       if (row['status'] == 'rejected') throw StateError('숨긴 알림을 먼저 되돌려 주세요.');
+      if(row['auto_applied_key']!=null){await pauseAutoForTx(db,row['id'] as String);}
       final kind = type ?? row['type'] as String,
           value = amount ?? row['amount'] as int;
       if (!['income', 'expense', 'transfer', 'group'].contains(kind) ||
@@ -364,6 +366,7 @@ extension NotificationFeedback on Repo {
         'memo',
         'dir',
         'destination',
+        'auto_applied_key',
       ];
       final before = {for (final f in fields) f: row[f]};
       final after = <String, Object?>{
@@ -372,6 +375,7 @@ extension NotificationFeedback on Repo {
         'amount': value,
         'status': 'ok',
         'memo': null,
+        'auto_applied_key':null,
         'dir': kind == 'income'
             ? 'in'
             : kind == 'expense'
@@ -386,6 +390,7 @@ extension NotificationFeedback on Repo {
       if (kind == 'transfer' && after['category'] == null) {
         after['category'] = '내 계좌 이체';
       }
+      await recordAutoAnswer(db,row,{...row,...after});
       final previous = await db.query(
         'learning_example',
         where: 'tx_id=?',
@@ -414,6 +419,11 @@ extension NotificationFeedback on Repo {
         where: 'id=?',
         whereArgs: [row['id']],
       );
+      if(enableAutoPatternKey!=null){
+        final observation=await db.query('auto_observation',where:'tx_id=? AND pattern_key=?',whereArgs:[row['id'],enableAutoPatternKey]);
+        if(observation.isEmpty)throw StateError('자동 반영 범위를 다시 확인해 주세요.');
+        await _setAutoPosting(db,enableAutoPatternKey,true,manual:true);
+      }
       if (row['account'] != null && kind != 'group') {
         await db.insert('account', {
           'key': row['account'],
@@ -475,6 +485,7 @@ extension NotificationFeedback on Repo {
       if (row['status'] == 'rejected') {
         throw StateError('이미 숨긴 알림이에요. 먼저 되돌려 주세요.');
       }
+      await recordAutoAnswer(db,row,null);
       if (row['pair_id'] != null ||
           (await db.query(
             'settlement_item',

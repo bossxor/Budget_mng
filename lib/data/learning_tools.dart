@@ -35,6 +35,7 @@ String _learningFingerprint(Map<String, Object?> row) => jsonEncode([
     'memo',
     'deleted_at',
     'notification_key',
+    'auto_applied_key',
   ])
     row[key],
 ]);
@@ -105,6 +106,7 @@ Future<Map<String, Object?>?> _rememberApproval(
       category.trim().isEmpty ||
       (row['amount'] as int) <= 0 ||
       ['candidate','rejected'].contains(row['status']) ||
+      row['auto_applied_key']!=null ||
       (row['pair_id'] != null && row['dir'] == 'in')) {
     return null;
   }
@@ -164,7 +166,7 @@ extension PersonalLearning on Repo {
     await migratePersonalApprovals();
     final rows = await _db.rawQuery(
       '''SELECT e.* FROM learning_example e JOIN tx t ON t.id=e.tx_id
-      WHERE t.deleted_at IS NULL AND ${confirmedTxFilter('t.')} ORDER BY e.updated_at DESC, e.tx_id LIMIT 500''',
+      WHERE t.deleted_at IS NULL AND t.auto_applied_key IS NULL AND ${confirmedTxFilter('t.')} ORDER BY e.updated_at DESC, e.tx_id LIMIT 500''',
     );
     final aliases = {
       for (final r in await _db.query('account_alias'))
@@ -224,7 +226,7 @@ extension PersonalLearning on Repo {
       await db.delete('learning_suggestion');
       final rows = await db.rawQuery(
         '''SELECT * FROM tx WHERE deleted_at IS NULL AND ${confirmedTxFilter()}
-        AND amount>0 AND type IN ('expense','income','transfer') AND source<>'manual'
+        AND amount>0 AND auto_applied_key IS NULL AND type IN ('expense','income','transfer') AND source<>'manual'
         AND (pair_id IS NULL OR dir='out') AND (memo IS NULL OR memo<>'중복 의심')
         AND id NOT IN (SELECT tx_id FROM learning_example)
         AND occurred_at>=? ORDER BY occurred_at DESC LIMIT 100''',

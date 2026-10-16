@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../data/repo.dart';
 import '../core/notification_policy.dart';
 import 'theme.dart';
+import 'auto_posting_screen.dart';
 
 class NotificationReviewScreen extends StatefulWidget {
   const NotificationReviewScreen(this.s, this.review, {super.key});
@@ -19,8 +20,10 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
       party = TextEditingController(),
       note = TextEditingController();
   String stage = 'review', type = 'income', scope = 'title';
-  String? category, reason, destination, duplicate, error, evidence,appLabel;
+  String? category, reason, destination, duplicate, error, evidence, appLabel;
   bool busy = true;
+  AutoPostingProgress? autoProgress;
+  bool enableAutoAfter = false;
   List<TxRow> duplicates = [];
   @override
   void initState() {
@@ -31,7 +34,11 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
   Future<void> load() async {
     try {
       final r = widget.review;
-      try{final apps=await widget.s.installedApps();final matches=apps.where((a)=>a.package==r.package);if(matches.isNotEmpty)appLabel=matches.first.name;}catch(_){}
+      try {
+        final apps = await widget.s.installedApps();
+        final matches = apps.where((a) => a.package == r.package);
+        if (matches.isNotEmpty) appLabel = matches.first.name;
+      } catch (_) {}
       final proposal = await widget.s.repo.proposeNotificationClassification(r);
       final assessment = await widget.s.repo.assessNotification(r);
       duplicates = await widget.s.repo.notificationDuplicates(r);
@@ -39,7 +46,13 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
       party.text = r.tx.title;
       type = proposal?.label.type ?? r.tx.type;
       category = proposal?.label.category ?? r.tx.category;
-      destination = r.tx.destination;
+      destination = r.tx.destination ?? await widget.s.repo.autoDestination(r);
+      autoProgress = await widget.s.repo.observeAutoProposal(
+        r,
+        type: type,
+        category: category,
+        destination: destination,
+      );
       evidence = assessment?.isTransaction == false
           ? '${assessment!.evidence} 이전에는 거래가 아니라고 알려주셨어요.'
           : proposal?.evidence ?? assessment?.evidence;
@@ -63,6 +76,7 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
   }
 
   Future<void> save({bool reject = false}) async {
+    var committed = false;
     setState(() {
       busy = true;
       error = null;
@@ -89,15 +103,44 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
           category: category,
           destination: type == 'transfer' ? destination : null,
           reason: reason == 'own_transfer' ? reason : null,
+          enableAutoPatternKey: enableAutoAfter ? autoProgress?.key : null,
         );
       }
+      committed = true;
       await widget.s.refresh();
+      if (!mounted) return;
+      if (!reject && autoProgress != null && !enableAutoAfter) {
+        final progress = await repo.autoProgress(autoProgress!.key);
+        if (progress.ready &&
+            !progress.enabled &&
+            !progress.paused &&
+            await repo.getKv('auto_offer_seen_${progress.key}') == null) {
+          await repo.setKv('auto_offer_seen_${progress.key}', '1');
+          if (!mounted) return;
+          final allow = await askAutoPosting(
+            context,
+            progress,
+            sourceName: appLabel ?? _source(widget.review.package),
+            accountLabels: autoAccountLabels(widget.s),
+          );
+          if (allow) {
+            await repo.setAutoPosting(progress.key, true);
+            enableAutoAfter = true;
+          }
+        }
+      }
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context), s = widget.s;
       Navigator.pop(context, true);
       messenger.showSnackBar(
         SnackBar(
-          content: Text(reject ? '이유를 반영했어요. 다음 판독에 참고할게요.' : '반영하고 학습했어요.'),
+          content: Text(
+            reject
+                ? '이유를 반영했어요. 다음 판독에 참고할게요.'
+                : enableAutoAfter
+                ? '반영했어요. 다음 같은 패턴은 자동으로 기록해요.'
+                : '반영하고 학습했어요.',
+          ),
           action: SnackBarAction(
             label: '되돌리기',
             onPressed: () async {
@@ -125,6 +168,17 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
         ),
       );
     } catch (e) {
+      if (committed && mounted) {
+        final messenger = ScaffoldMessenger.of(context);
+        Navigator.pop(context, true);
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('답변은 반영됐어요. 자동 반영 설정과 최신 내역은 설정에서 확인해 주세요.'),
+          ),
+        );
+        return;
+      }
+      enableAutoAfter = false;
       if (mounted) {
         setState(() {
           busy = false;
@@ -136,6 +190,39 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
         });
       }
     }
+  }
+
+  Future<void> enablePattern() async {
+    if (autoProgress == null) return;
+    if (category == null) {
+      setState(() {
+        stage = 'correct';
+        error = '자동 반영할 분류를 먼저 선택해 주세요.';
+      });
+      return;
+    }
+    final display = AutoPostingProgress(
+      {
+        ...autoProgress!.pattern,
+        'category': category,
+        'type': type,
+        'destination': destination,
+      },
+      autoProgress!.checked,
+      autoProgress!.correct,
+      autoProgress!.streak,
+    );
+    if (!await askAutoPosting(
+          context,
+          display,
+          sourceName: appLabel ?? _source(widget.review.package),
+          accountLabels: autoAccountLabels(widget.s),
+        ) ||
+        !mounted) {
+      return;
+    }
+    enableAutoAfter = true;
+    await save();
   }
 
   Widget select(
@@ -198,7 +285,7 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '${appLabel??_source(r.package)} · ${r.title}',
+                              '${appLabel ?? _source(r.package)} · ${r.title}',
                               style: TextStyle(color: cs.onSurfaceVariant),
                             ),
                             const SizedBox(height: 18),
@@ -244,7 +331,12 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
                       isExpanded: true,
                       decoration: const InputDecoration(labelText: '거래 종류'),
                       items: [
-                        for (final k in ['income', 'expense', 'transfer','group'])
+                        for (final k in [
+                          'income',
+                          'expense',
+                          'transfer',
+                          'group',
+                        ])
                           DropdownMenuItem(value: k, child: Text(_kind(k))),
                       ],
                       onChanged: (v) => setState(() {
@@ -268,7 +360,10 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
                       const SizedBox(height: 16),
                       DropdownButtonFormField<String>(
                         initialValue:
-                            widget.s.accounts.any((a) => a.key == destination && a.key!=r.tx.account)
+                            widget.s.accounts.any(
+                              (a) =>
+                                  a.key == destination && a.key != r.tx.account,
+                            )
                             ? destination
                             : null,
                         isExpanded: true,
@@ -371,6 +466,25 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
                     if (reason == 'ad' || reason == 'otp')
                       const Text('이 앱의 비슷한 알림을 판독할 때 오답 사례로 참고해요.'),
                   ],
+                  if (autoProgress != null && stage != 'reason')
+                    AutoProgressCard(
+                      autoProgress!,
+                      onEnable: busy ? null : enablePattern,
+                      onPause: busy
+                          ? null
+                          : () async {
+                              await widget.s.repo.setAutoPosting(
+                                autoProgress!.key,
+                                false,
+                              );
+                              final updated = await widget.s.repo.autoProgress(
+                                autoProgress!.key,
+                              );
+                              if (mounted) {
+                                setState(() => autoProgress = updated);
+                              }
+                            },
+                    ),
                   if (busy) const Center(child: CircularProgressIndicator()),
                   if (error != null)
                     Padding(

@@ -8,6 +8,7 @@ import '../core/personal_classifier.dart';
 import '../core/bank_accounts.dart';
 import '../core/notification_policy.dart';
 import '../core/notification_classifier.dart';
+import 'package:crypto/crypto.dart';
 import 'budget_repo.dart';
 import 'extras.dart';
 import 'planning_repo.dart';
@@ -17,6 +18,7 @@ part 'account_tools.dart';
 part 'learning_tools.dart';
 part 'account_registry.dart';
 part 'notification_feedback.dart';
+part 'auto_posting.dart';
 
 class TxRow {
   TxRow(this.id, this.type, this.amount, this.title, this.category,
@@ -33,6 +35,7 @@ class TxRow {
   String? pairId, destination, route, direction;
   String? note; // 사용자 메모
   bool personalReview = false;
+  bool autoPosted = false;
 
   /// 정산에 묶인 지출이면 내 몫, 아니면 null.
   int? mine;
@@ -56,7 +59,8 @@ class TxRow {
       )..note = m['note'] as String?
        ..pairId = m['pair_id'] as String?
        ..destination = m['destination'] as String?
-       ..direction = m['dir'] as String?;
+       ..direction = m['dir'] as String?
+       ..autoPosted = m['auto_applied_key']!=null;
 }
 
 class TxSplit {
@@ -200,6 +204,7 @@ class Repo {
     await ensurePersonalLearning(d);
     await ensureAccountRegistry(d);
     await ensureNotificationFeedback(d);
+    await ensureAutoPosting(d);
   }
 
   // ---- kv ----
@@ -398,6 +403,9 @@ class Repo {
             conflictAlgorithm: ConflictAlgorithm.ignore);
       }
     }
+    await tryAutoPost(id);
+    final latest=(await _db.query('tx',columns:['status'],where:'id=?',whereArgs:[id])).single;
+    status=latest['status'] as String;
     await _pairTransfers(id, t, at);
     return status == 'review' || status=='candidate';
   }
@@ -686,7 +694,7 @@ class Repo {
   /// 이름·금액·날짜·메모를 고친다. 이름은 표시용 가맹점(merchant)에 저장해 입금자명 매칭은 그대로 둔다.
   Future<void> updateTx(String id,
       {String? title, int? amount, DateTime? at, String? note}) async {
-    final v = <String, Object?>{'updated_at': DateTime.now().millisecondsSinceEpoch};
+    final v = <String, Object?>{'updated_at': DateTime.now().millisecondsSinceEpoch,'auto_applied_key':null};
     if (title != null && title.trim().isNotEmpty) v['merchant'] = title.trim();
     if (amount != null) v['amount'] = amount;
     if (at != null) v['occurred_at'] = at.millisecondsSinceEpoch;
@@ -695,6 +703,7 @@ class Repo {
       final existing=await db.query('tx',where:'id=?',whereArgs:[id]);
       if(existing.isEmpty)throw StateError('내역을 찾을 수 없어요.');
       if(['candidate','rejected'].contains(existing.single['status']))throw StateError('알림 확인에서 고쳐서 맞아요를 선택해 주세요.');
+      await pauseAutoForTx(db,id);
       await db.update('tx', v, where: 'id=?', whereArgs: [id]);
       final current=(await db.query('tx',where:'id=?',whereArgs:[id])).first;
       if (title != null || amount != null || at != null) {
@@ -722,6 +731,7 @@ class Repo {
       if(rows.isEmpty)return;
       if(['candidate','rejected'].contains(rows.single['status']))throw StateError('알림 확인에서 아니에요와 이유를 선택해 주세요.');
       for(final key in [id, if(rows.first['pair_id']!=null)rows.first['pair_id'] as String]) {
+        await pauseAutoForTx(db,key);
         await db.delete('learning_example',where:'tx_id=?',whereArgs:[key]);
         await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[key]);
         await db.update('tx',{'deleted_at':DateTime.now().millisecondsSinceEpoch,'updated_at':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[key]);

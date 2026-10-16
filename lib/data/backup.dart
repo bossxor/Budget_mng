@@ -20,6 +20,8 @@ const _tables = [
   'learning_example',
   'notif_feedback',
   'notif_mute',
+  'auto_pattern',
+  'auto_observation',
   'rule',
   'person',
   'settlement',
@@ -173,6 +175,7 @@ Future<int> importData(Database db, Map<String, Object?> data) async {
           'account_alias' => ['canonical'],
           'allocation' => ['from_key', 'to_key'],
           'gap_alert' => ['account'],
+          'auto_pattern' => ['destination'],
           _ => <String>[],
         };
         for (final field in fields) {
@@ -180,7 +183,22 @@ Future<int> importData(Database db, Map<String, Object?> data) async {
         }
         if (name == 'account_alias' && r['alias'] == r['canonical']) continue;
         if (name == 'learning_example') r = remapSample(r);
+        if(name=='tx'&&r['auto_pair_before'] is String){
+          final snapshot=jsonDecode(r['auto_pair_before'] as String) as Map<String,dynamic>;
+          for(final field in ['before','after']){final value=Map<String,dynamic>.from(snapshot[field] as Map);value['destination']=accountMap[value['destination']]??value['destination'];snapshot[field]=value;}
+          r['auto_pair_before']=jsonEncode(snapshot);
+        }
+        if(name=='auto_observation'){
+          final proposed=jsonDecode(r['proposed_json'] as String) as Map<String,dynamic>;
+          proposed['destination']=accountMap[proposed['destination']]??proposed['destination'];
+          r['proposed_json']=jsonEncode(proposed);
+        }
         if (name == 'classification_history') {
+          for(final field in ['before_json','after_json']){
+            final value=jsonDecode(r[field] as String) as Map<String,dynamic>;
+            for(final key in ['account','destination']){if(value.containsKey(key))value[key]=accountMap[value[key]]??value[key];}
+            r[field]=jsonEncode(value);
+          }
           for (final field in ['sample_before', 'sample_after']) {
             if (r[field] is String) {
               r[field] = jsonEncode(
@@ -210,6 +228,16 @@ Future<int> importData(Database db, Map<String, Object?> data) async {
             );
           }
         } else {
+          if(name=='auto_pattern'||name=='auto_observation'){
+            final id=name=='auto_pattern'?'pattern_key':'tx_id';
+            final revision=name=='auto_pattern'?'updated_at':'decided_at';
+            final current=await t.query(name,where:'$id=?',whereArgs:[r[id]]);
+            if(name=='auto_pattern'&&r['enabled']==1)r['enabled']=2; // 복원한 자동 반영은 범위를 다시 확인한 뒤 켠다.
+            if(current.isEmpty||((r[revision] as int?)??0)>((current.single[revision] as int?)??0)){
+              await t.insert(name,r,conflictAlgorithm:ConflictAlgorithm.replace);
+            }
+            continue;
+          }
           if(name=='notif_mute'){
             final current=await t.query(name,where:'package=? AND title=?',whereArgs:[r['package'],r['title']]);
             int revision(Map<String,Object?> value){

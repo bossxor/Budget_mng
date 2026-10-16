@@ -95,11 +95,12 @@ extension AccountTools on Repo {
       final ids=[id, if(first['pair_id']!=null && category!=null)first['pair_id'] as String];
       final batch=_newId();
       for(final key in ids) {
+        await pauseAutoForTx(db,key);
         final found=await db.query('tx',where:'id=? AND deleted_at IS NULL',whereArgs:[key]);
         if(found.isEmpty) continue;
         final current=found.first;
-        final before={for(final name in ['type','category','status','memo','dir'])name:current[name]};
-        final after={...before,'status':'ok','memo':null};
+        final before={for(final name in ['type','category','status','memo','dir','auto_applied_key'])name:current[name]};
+        final after={...before,'status':'ok','memo':null,'auto_applied_key':null};
         if(type!=null) { after['type']=type; }
         if(category!=null) { after['category']=category; }
         if(type=='transfer' && current['type']!='transfer') after['dir']=current['type']=='income'?'in':'out';
@@ -128,16 +129,32 @@ extension AccountTools on Repo {
       final current=await db.query('tx',where:'id=? AND deleted_at IS NULL',whereArgs:[change['tx_id']]);
       final after=jsonDecode(change['after_json'] as String) as Map<String,dynamic>;
       final before=jsonDecode(change['before_json'] as String) as Map<String,dynamic>;
-      if (current.isNotEmpty && current.first['pair_id'] != null && before['type'] != 'transfer') return false;
-      if(current.isEmpty || after.entries.any((e)=>current.first[e.key]!=e.value)) return false;
+      final autoPair=current.isNotEmpty&&current.first['auto_pair_before']!=null&&current.first['auto_applied_key']!=null;
+      if (current.isNotEmpty && current.first['pair_id'] != null && before['type'] != 'transfer'&&!autoPair) return false;
+      if(current.isEmpty || after.entries.any((e)=>!(autoPair&&e.key=='destination')&&current.first[e.key]!=e.value)) return false;
+      if(autoPair){
+        final snapshot=jsonDecode(current.first['auto_pair_before'] as String) as Map<String,dynamic>;
+        final partner=await db.query('tx',where:'id=? AND deleted_at IS NULL',whereArgs:[snapshot['id']]);
+        final expected=snapshot['after'] as Map<String,dynamic>;
+        if(partner.isEmpty||expected.entries.any((e)=>partner.single[e.key]!=e.value))return false;
+      }
       if(change['sample_after']!=null) {
         final sample=await db.query('learning_example',where:'tx_id=?',whereArgs:[change['tx_id']]);
         if(sample.isEmpty || jsonEncode(sample.first)!=change['sample_after']) return false;
       }
     }
     for(final change in changes) {
+      final live=(await db.query('tx',where:'id=?',whereArgs:[change['tx_id']])).single;
+      await pauseAutoForTx(db,change['tx_id'] as String);
+      if(live['auto_pair_before']!=null&&live['auto_applied_key']!=null){
+        final snapshot=jsonDecode(live['auto_pair_before'] as String) as Map<String,dynamic>;
+        await pauseAutoForTx(db,snapshot['id'] as String);
+        await db.update('tx',Map<String,Object?>.from(snapshot['before'] as Map),where:'id=?',whereArgs:[snapshot['id']]);
+        await db.update('tx',{'pair_id':null,'auto_pair_before':null},where:'id=?',whereArgs:[change['tx_id']]);
+      }
       final before=jsonDecode(change['before_json'] as String) as Map<String,dynamic>;
       await db.update('tx',{...before,'updated_at':DateTime.now().millisecondsSinceEpoch},where:'id=?',whereArgs:[change['tx_id']]);
+      await pauseAutoForTx(db,change['tx_id'] as String);
       if(before['status']=='candidate'){
         await db.update('notif_feedback',{'verdict':'undone','at':DateTime.now().microsecondsSinceEpoch},
           where:"tx_id=? AND verdict IN ('yes','fixed')",whereArgs:[change['tx_id']]);
@@ -175,6 +192,15 @@ extension AccountTools on Repo {
         final fresh = await db.query('tx', where: 'id IN (?,?) AND pair_id IS NULL AND deleted_at IS NULL', whereArgs: [out['id'], incoming['id']]);
         if (fresh.length != 2) return;
         for(final (a,b) in [(out,incoming),(incoming,out)]) {
+          if(a['auto_applied_key']!=null){
+            final history=await db.query('classification_history',where:'tx_id=? AND undone=0',whereArgs:[a['id']],orderBy:'created_at DESC',limit:1);
+            if(history.isNotEmpty){final after=jsonDecode(history.single['after_json'] as String) as Map<String,dynamic>;
+              if(after['auto_applied_key']==a['auto_applied_key'])await db.update('classification_history',{'after_json':jsonEncode({...after,'type':'transfer','destination':b['account']})},where:'id=?',whereArgs:[history.single['id']]);
+            }
+            await db.update('tx',{'auto_pair_before':jsonEncode({'id':b['id'],
+              'before':{for(final f in ['type','pair_id','destination'])f:b[f]},
+              'after':{'type':'transfer','pair_id':a['id'],'destination':a['account']}})},where:'id=?',whereArgs:[a['id']]);
+          }
           // 연결로 거래 구조가 바뀌었으므로 이전 구조에서 승인한 예제는 다시 확인한다.
           await db.delete('learning_example',where:'tx_id=?',whereArgs:[a['id']]);
           await db.delete('learning_suggestion',where:'tx_id=?',whereArgs:[a['id']]);

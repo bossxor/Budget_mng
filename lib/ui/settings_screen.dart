@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'notification_review.dart';
+import 'auto_posting_screen.dart';
 
 import '../app_state.dart';
 import '../data/settlement_repo.dart';
@@ -530,6 +531,7 @@ class SettingsScreen extends StatelessWidget {
         ),
       ]),
       _Group('알림 수집', [
+        _Row(icon:Icons.auto_awesome_rounded,color:Dsn.blue,title:'패턴 학습과 자동 반영',value:'확인 진행 상황 · 자동 반영 지정 · 일시중지',onTap:()=>Navigator.of(context).push(MaterialPageRoute(builder:(_)=>AutoPostingScreen(s)))),
         _Row(icon:Icons.notifications_off_outlined,color:Dsn.blue,title:'숨긴 알림',value:'거절한 알림 확인 · 숨김 해제 · 되돌리기',onTap:()=>Navigator.of(context).push(MaterialPageRoute(builder:(_)=>HiddenNotificationsScreen(s)))),
         _Row(icon: Icons.notifications_active_outlined, color: Dsn.blue,
           title: '반영·확인 필요 알림', value: '자동 기록 결과를 알림으로 받아요 · 유형별 끄기는 알림 설정에서',

@@ -91,6 +91,7 @@ class TxTile extends StatelessWidget {
       _ => (catIcon(t.category), Dsn.cat(t.category)),
     };
     final sub = [
+      if(t.autoPosted)'자동 반영',
       if (t.type == 'transfer') t.category ?? '내 계좌 이체',
       if (t.type == 'transfer' && t.pairId != null) '입출금 연결',
       if (t.type == 'group') '모임통장',
@@ -869,6 +870,9 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t,
     final suggestion = (await s.repo.personalSuggestions())[t.id];
     if (!context.mounted) return;
     if (suggestion != null) {
+      final notification=await s.repo.notificationReview(t.id);
+      if(!context.mounted)return;
+      if(notification!=null){await Navigator.of(context).push(MaterialPageRoute(builder:(_)=>NotificationReviewScreen(s,notification)));return;}
       await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => PersonalReviewScreen(
         s,t,suggestion,amountLabel:'${fmt(t.amount)}원',
         onDetails:()=>showEditSheet(context,s,t,showRecommendation:false))));
@@ -934,7 +938,7 @@ Future<void> showEditSheet(BuildContext context, AppState s, TxRow t,
             ),
           ]),
           TextButton.icon(
-            icon: const Icon(Icons.undo_rounded), label: const Text('최근 분류 변경 되돌리기'),
+            icon: const Icon(Icons.undo_rounded), label: Text(t.autoPosted?'자동 반영 되돌리고 이 패턴 중지':'최근 분류 변경 되돌리기'),
             onPressed: () async {
               final restored = await s.repo.undoClassification(t.id);
               await s.refresh();
