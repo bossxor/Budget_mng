@@ -77,9 +77,11 @@ class Amount extends StatelessWidget {
 }
 
 class TxTile extends StatelessWidget {
-  const TxTile(this.t, {super.key, this.onTap});
+  const TxTile(this.t, {super.key, this.onTap, this.detail});
   final TxRow t;
   final VoidCallback? onTap;
+  /// 거래가 만들어진 알림의 출처와 원문. 있으면 한 줄 더 보여 준다.
+  final String? detail;
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -135,6 +137,14 @@ class TxTile extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 12.5, color: grey)),
+              if (detail != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(detail!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12.5, color: cs.onSurface)),
+                ),
             ]),
           ),
           const SizedBox(width: 8),
@@ -1092,7 +1102,7 @@ class ReviewScreen extends StatefulWidget {
 }
 
 class _ReviewScreenState extends State<ReviewScreen> {
-  late Future<(List<TxRow>, List<Map<String, Object?>>)> _f;
+  late Future<(List<TxRow>, List<Map<String, Object?>>, Map<String, ({String package, String text})>)> _f;
   @override
   void initState() {
     super.initState();
@@ -1103,7 +1113,8 @@ class _ReviewScreenState extends State<ReviewScreen> {
     _f = () async {
       final r = await widget.s.repo.reviewList();
       final f = await widget.s.repo.failedRaw();
-      return (r, f);
+      final o = await widget.s.repo.txOrigins(r.map((t) => t.id));
+      return (r, f, o);
     }();
   }
 
@@ -1116,7 +1127,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
             if (!snap.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
-            final (rows, failed) = snap.data!;
+            final (rows, failed, origins) = snap.data!;
             if (rows.isEmpty && failed.isEmpty) {
               return const Center(child: Text('확인할 내역이 없어요 🎉'));
             }
@@ -1127,7 +1138,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
                     padding: const EdgeInsets.all(4),
                     child: Column(children: [
                       for (final t in rows)
-                        TxTile(t, onTap: () async {
+                        TxTile(t, detail: origins[t.id] == null
+                            ? null
+                            : '${sourceLabel(origins[t.id]!.package)} · ${origins[t.id]!.text}', onTap: () async {
                           await showEditSheet(context, widget.s, t);
                           setState(_load);
                         }),
@@ -1150,7 +1163,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                     child: ListTile(
                       title: Text((r['text'] as String).replaceAll('\n', ' '),
                           maxLines: 2, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(r['package'] as String,
+                      subtitle: Text(sourceLabel(r['package'] as String),
                           style: const TextStyle(fontSize: 11)),
                       trailing: IconButton(
                         tooltip: '무시',

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/repo.dart';
 import '../core/notification_policy.dart';
+import 'screens.dart' show fmt;
 import 'theme.dart';
 import 'auto_posting_screen.dart';
 
@@ -25,6 +26,7 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
   AutoPostingProgress? autoProgress;
   bool enableAutoAfter = false;
   List<TxRow> duplicates = [];
+  Map<String, ({String package, String text})> origins = {};
   @override
   void initState() {
     super.initState();
@@ -42,6 +44,7 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
       final proposal = await widget.s.repo.proposeNotificationClassification(r);
       final assessment = await widget.s.repo.assessNotification(r);
       duplicates = await widget.s.repo.notificationDuplicates(r);
+      origins = await widget.s.repo.txOrigins(duplicates.map((d) => d.id));
       amount.text = '${r.tx.amount}';
       party.text = r.tx.title;
       type = proposal?.label.type ?? r.tx.type;
@@ -439,21 +442,10 @@ class _NotificationReviewScreenState extends State<NotificationReviewScreen> {
                         ),
                     ],
                     if (reason == 'duplicate')
-                      DropdownButtonFormField<String>(
-                        initialValue: duplicate,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: '같은 거래 선택',
-                        ),
-                        items: [
-                          for (final d in duplicates)
-                            DropdownMenuItem(
-                              value: d.id,
-                              child: Text(
-                                '${d.occurredAt.month}/${d.occurredAt.day} · ${d.title} · ${d.amount}원',
-                              ),
-                            ),
-                        ],
+                      _DuplicatePicker(
+                        candidates: duplicates,
+                        origins: origins,
+                        selected: duplicate,
                         onChanged: (v) => setState(() => duplicate = v),
                       ),
                     if (reason == 'other')
@@ -572,6 +564,137 @@ String _source(String package) =>
       'com.google.android.apps.messaging': '문자',
     }[package] ??
     package;
+
+String sourceLabel(String package) => _source(package);
+
+/// 같은 거래 후보. 언제, 얼마뿐 아니라 어느 계좌의 어떤 알림에서 생긴 내역인지 보여 준다.
+class _DuplicatePicker extends StatelessWidget {
+  const _DuplicatePicker({
+    required this.candidates,
+    required this.origins,
+    required this.selected,
+    required this.onChanged,
+  });
+  final List<TxRow> candidates;
+  final Map<String, ({String package, String text})> origins;
+  final String? selected;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    if (candidates.isEmpty) {
+      return Text(
+        '같은 금액·종류로 하루 안에 기록된 거래가 없어요.',
+        style: TextStyle(color: cs.onSurfaceVariant),
+      );
+    }
+    String two(int n) => n.toString().padLeft(2, '0');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('같은 거래 선택', style: TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        for (final d in candidates)
+          Builder(
+            builder: (context) {
+              final on = d.id == selected;
+              final o = origins[d.id];
+              final meta = [
+                if (d.account != null) d.account!,
+                if (d.category != null) d.category!,
+                o == null ? '직접 입력' : sourceLabel(o.package),
+              ].join(' · ');
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Semantics(
+                  button: true,
+                  selected: on,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => onChanged(d.id),
+                    child: Ink(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        color: on ? cs.primaryContainer : null,
+                        border: Border.all(
+                          color: on ? cs.primary : cs.outlineVariant,
+                          width: on ? 2 : 1,
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(right: 10, top: 2),
+                            child: Icon(
+                              on
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_off,
+                              color: on ? cs.primary : cs.onSurfaceVariant,
+                            ),
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${d.occurredAt.month}/${d.occurredAt.day} ${two(d.occurredAt.hour)}:${two(d.occurredAt.minute)} · ${d.title}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      '${fmt(d.amount)}원',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  meta,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
+                                if (o != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      o.text,
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: cs.onSurface,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
 
 class HiddenNotificationsScreen extends StatefulWidget {
   const HiddenNotificationsScreen(this.s, {super.key});

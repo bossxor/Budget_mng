@@ -463,6 +463,29 @@ extension NotificationFeedback on Repo {
     return rows.map(TxRow.fromMap).toList();
   }
 
+  /// 거래가 만들어진 알림의 출처와 원문. 직접 입력한 내역에는 없다.
+  Future<Map<String, ({String package, String text})>> txOrigins(
+    Iterable<String> ids,
+  ) async {
+    final list = ids.toList();
+    if (list.isEmpty) return {};
+    final rows = await _db.rawQuery(
+      '''SELECT t.id, r.package, r.title, r.text FROM tx t
+         JOIN raw_notification r ON r.id=t.raw_id
+         WHERE t.id IN (${List.filled(list.length, '?').join(',')})''',
+      list,
+    );
+    return {
+      for (final r in rows)
+        r['id'] as String: (
+          package: r['package'] as String,
+          text: joinNotification(r['title'] as String?, r['text'] as String)
+              .replaceAll(RegExp(r'\s+'), ' ')
+              .trim(),
+        ),
+    };
+  }
+
   Future<void> rejectNotification(
     NotificationReview review, {
     required String reason,
